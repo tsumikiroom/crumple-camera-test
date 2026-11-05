@@ -93,7 +93,7 @@ button {
 
 <div id="start">
   <h1>Crumple Camera</h1>
-  <p>Pick a camera. Touch the picture and it peels off the screen like a sheet of paper. Rub it to crumple it. Hold still, then swipe it off the screen to keep it as a photo. Crumple it all the way and it turns into a paper ball and is thrown away. The video never leaves this device.</p>
+  <p>Pick a camera. Touch the picture and it peels off the screen like a sheet of paper. Push, drag and pinch it to crumple it. Hold still, then swipe it off the screen to keep it as a photo. Crumple it all the way and it turns into a paper ball and is thrown away. The video never leaves this device.</p>
   <button data-facing="user">Front camera</button>
   <button data-facing="environment">Back camera</button>
   <div id="err"></div>
@@ -119,7 +119,7 @@ button {
   <div class="row"><button id="saveBtn">Save to device</button><button id="closeViewer">Close</button></div>
 </div>
 
-<!-- full-screen triangle, shared by the background and the crease passes -->
+<!-- full-screen triangle for the monitor behind the sheet -->
 <script type="x-shader/x-vertex" id="vFull">#version 300 es
 out vec2 vUV;
 void main() {
@@ -148,120 +148,58 @@ void main() {
   o = vec4(c * uDim * vig, 1.0);
 }
 </script>
-<!-- adds creases (folds) and squeezes into the crumple map: rg = surface slope, ba = how far the paper was pulled -->
-<script type="x-shader/x-fragment" id="fMap">#version 300 es
-precision highp float;
-uniform vec2 uSize;     // map size in texels
-uniform vec2 uAspect;   // paper size in units (the short side is 1)
-uniform int uN;
-uniform vec4 uA[16];    // crease: point xy, direction along the fold xy
-uniform vec4 uB[16];    // crease: slope (sign = ridge or valley), band half width, pull 0..1, half length
-uniform int uM;
-uniform vec4 uS[4];     // squeeze: point xy, strength, radius
-out vec4 o;
-float bump(float x) { x = clamp(1.0 - x * x, 0.0, 1.0); return x * x; }
-void main() {
-  vec2 q = gl_FragCoord.xy / uSize * uAspect;
-  vec2 g = vec2(0.0), D = vec2(0.0);
-  for (int i = 0; i < 16; i++) {
-    if (i >= uN) break;
-    vec2 p = uA[i].xy, t = uA[i].zw, n = vec2(-t.y, t.x);
-    float A = uB[i].x, m = uB[i].y, k = uB[i].z, L = uB[i].w;
-    vec2 d = q - p;
-    float s = dot(d, n), u = dot(d, t);
-    float w = bump(u / L) * bump(s / (0.7 * L));
-    float sg = s < 0.0 ? -1.0 : 1.0;
-    g += A * sg * n * w;                      // V-shaped fold: the two sides tilt opposite ways
-    D -= n * sg * k * min(abs(s), m) * w;     // the band along the fold is eaten, both sides pulled in
-  }
-  for (int j = 0; j < 4; j++) {
-    if (j >= uM) break;
-    vec2 d = q - uS[j].xy;
-    D -= d * uS[j].z * bump(length(d) / uS[j].w);  // paper gathered toward the finger
-  }
-  o = vec4(g, D);
-}
-</script>
-<!-- the sheet: a fine grid moved by the crumple map, or wrapped into a ball -->
+<!-- the sheet: a 3D cloth-like grid moved by the paper simulation (positions in css px, z toward the viewer) -->
 <script type="x-shader/x-vertex" id="vSheet">#version 300 es
-in vec2 aP;               // paper uv 0..1, y down
-uniform sampler2D uMap;
-uniform vec2 uAspect;     // paper size in units
-uniform float uUnit;      // css px per unit
+in vec3 aPos;
+in vec3 aNrm;
+in vec2 aUV;
 uniform vec2 uView;       // css px
-uniform vec2 uCenter;     // scale around this point (css px)
+uniform vec2 uCenter;     // screen centre (css px)
+uniform vec2 uSheetC;     // sheet centre in its own coordinates (css px when it was made)
 uniform float uScale;
 uniform vec2 uOffset;     // css px
-uniform float uBall;      // 0 = sheet, 1 = paper ball
-uniform vec2 uBallC;
-uniform float uBallR;
-uniform float uRot;
-out vec2 vP;
-out vec3 vPos;
+uniform float uDepth;     // css px of height that maps to the full depth range
+uniform float uShadow;    // > 0: the shadow pass (flattened onto the monitor, pushed away from the light)
+out vec2 vUV;
+out vec3 vN;
+out float vZ;
 void main() {
-  vec4 m = textureLod(uMap, aP, 0.0);
-  vec2 px = (aP * uAspect + m.ba) * uUnit;
-  vec3 pos = vec3(px, 0.0);
-  if (uBall > 0.0) {
-    float th = aP.x * 6.2831853 + uRot, ph = aP.y * 3.1415927;
-    vec3 n = vec3(sin(ph) * sin(th), -cos(ph), sin(ph) * cos(th));
-    // lumps in every direction (waves across the ball) plus fine folds from the paper itself
-    float lump = 1.0 + 0.09 * (sin(dot(n, vec3(5.1, 2.3, -3.7)) + 1.3) + sin(dot(n, vec3(-2.9, 6.3, 1.7)) + 0.4)
-                             + sin(dot(n, vec3(3.3, -4.1, 6.9)) + 2.1))
-               + 0.025 * sin(aP.x * 41.0 + aP.y * 17.0) * sin(aP.y * 33.0 - aP.x * 13.0)
-               + 0.06 * clamp(length(m.rg), 0.0, 2.0);
-    vec3 onBall = vec3(uBallC, 0.0) + n * uBallR * lump;
-    vec3 gathered = vec3(uBallC + (px - uBallC) * (1.0 - 0.8 * uBall), 0.0);
-    pos = mix(gathered, onBall, smoothstep(0.15, 1.0, uBall));
-  }
-  vec2 s = uCenter + (pos.xy - uCenter) * uScale + uOffset;
-  vP = aP;
-  vPos = pos;
-  gl_Position = vec4(s.x / uView.x * 2.0 - 1.0, 1.0 - s.y / uView.y * 2.0, -pos.z / (uUnit * 4.0), 1.0);
+  vec2 xy = aPos.xy;
+  float z = aPos.z;
+  if (uShadow > 0.0) { xy += vec2(0.35, 0.6) * z; z = -1.0; }
+  vec2 s = uCenter + (xy - uSheetC) * uScale + uOffset;
+  vUV = aUV; vN = aNrm; vZ = aPos.z;
+  gl_Position = vec4(s.x / uView.x * 2.0 - 1.0, 1.0 - s.y / uView.y * 2.0, clamp(-z / uDepth, -1.0, 1.0), 1.0);
 }
 </script>
 <script type="x-shader/x-fragment" id="fSheet">#version 300 es
 precision highp float;
-uniform sampler2D uMap;
 uniform sampler2D uImg;
 uniform vec4 uCrop;
 uniform float uMirror;
 uniform float uLit;      // 0 = plain picture (still on the monitor), 1 = paper lighting
-uniform float uBall;
-uniform vec2 uTexel;     // one texel of the crumple map
-uniform float uShadow;   // > 0: draw the soft shadow under the sheet
+uniform float uShadow;
 uniform float uAlpha;
-in vec2 vP;
-in vec3 vPos;
+uniform float uUnit;     // css px of the screen's short side
+in vec2 vUV;
+in vec3 vN;
+in float vZ;
 out vec4 o;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 void main() {
   if (uShadow > 0.0) { o = vec4(0.0, 0.0, 0.0, uShadow); return; }
-  vec2 g = texture(uMap, vP).rg;
-  vec2 ex = vec2(uTexel.x * 1.25, 0.0), ey = vec2(0.0, uTexel.y * 1.25);
-  float crease = length(texture(uMap, vP + ex).rg - texture(uMap, vP - ex).rg)
-               + length(texture(uMap, vP + ey).rg - texture(uMap, vP - ey).rg);
-  vec3 N = normalize(vec3(-g, 1.0));
-  float b = smoothstep(0.15, 1.0, uBall);
-  if (b > 0.0) { // the ball: flat facets from the mesh itself (y runs down, so flip y)
-    vec3 f = normalize(cross(dFdx(vPos), dFdy(vPos)));
-    f.y = -f.y;
-    if (f.z < 0.0) f = -f;
-    N = normalize(mix(N, f, b));
-  }
-  vec3 L = normalize(vec3(-0.45, -0.62, 0.64));   // light from the upper left (y runs down)
+  vec3 N = normalize(vN);
+  if (N.z < 0.0) N = -N;                            // paper has two sides
+  vec3 L = normalize(vec3(-0.45, -0.62, 0.64));     // light from the upper left (y runs down)
   vec3 H = normalize(L + vec3(0.0, 0.0, 1.0));
-  float diff = 1.0 + 1.2 * (dot(N, L) - L.z);      // flat paper keeps its picture as it was
-  float spec = max(pow(max(dot(N, H), 0.0), 60.0) - pow(H.z, 60.0), 0.0);
-  vec3 L2 = normalize(vec3(0.7, -0.2, 0.69));      // second, softer gloss from the right
-  vec3 H2 = normalize(L2 + vec3(0.0, 0.0, 1.0));
-  spec += 0.5 * max(pow(max(dot(N, H2), 0.0), 24.0) - pow(H2.z, 24.0), 0.0);
-  vec2 uv = uCrop.xy + vP * uCrop.zw;
+  float diff = 1.0 + 1.25 * (dot(N, L) - L.z);      // flat paper keeps its picture as it was
+  float spec = max(pow(max(dot(N, H), 0.0), 30.0) - pow(H.z, 30.0), 0.0);
+  float low = 1.0 - 0.18 * (1.0 - smoothstep(0.0, uUnit * 0.03, vZ)) * smoothstep(0.02, 0.3, 1.0 - N.z); // valleys a little darker
+  vec2 uv = uCrop.xy + vUV * uCrop.zw;
   if (uMirror > 0.5) uv.x = 1.0 - uv.x;
   vec3 c = texture(uImg, uv).rgb;
-  vec3 lit = c * clamp(diff, 0.12, 1.6) + vec3(spec) * 0.32;
-  lit = mix(lit, vec3(0.94, 0.93, 0.9), clamp(crease * 0.3, 0.0, 0.5));  // ink cracks white along the folds
-  lit += (hash(floor(vP * 900.0)) - 0.5) * 0.035;                         // print grain
+  vec3 lit = c * clamp(diff, 0.15, 1.6) * low + vec3(spec) * 0.28;
+  lit += (hash(floor(vUV * 900.0)) - 0.5) * 0.03;   // print grain
   o = vec4(mix(c, lit, uLit), uAlpha);
 }
 </script>
@@ -285,10 +223,10 @@ function showError(text) {
 // ---------- WebGL2 ----------
 const gl = cv.getContext('webgl2', { antialias: true, alpha: false, preserveDrawingBuffer: TEST });
 let ready = false;
-let progBg, progMap, progSheet;
-const U = { bg: {}, map: {}, sheet: {} };
-let fullVao, sheetVao, sheetIdx, sheetCount = 0;
-let videoTex, paperTex, mapTex, mapFb, capFb, capColor, capDepth, capW = 0, capH = 0;
+let progBg, progSheet;
+const U = { bg: {}, sheet: {} };
+let fullVao, sheetVao, posBuf, nrmBuf, uvBuf, idxBuf, sheetCount = 0;
+let videoTex, paperTex, capFb, capColor, capDepth, capW = 0, capH = 0;
 
 function compile(type, id) {
   const sh = gl.createShader(type);
@@ -307,13 +245,14 @@ function program(vs, fs, attribs, uniforms, store) {
   for (const u of uniforms) store[u] = gl.getUniformLocation(p, u);
   return p;
 }
-function makeTex(filter) {
+function makeTex() {
   const t = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, t);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
   return t;
 }
 
@@ -321,35 +260,36 @@ if (!gl) {
   showError('This browser does not support WebGL2, so the paper cannot be shown.');
 } else {
   try {
-    // the crumple map is a float texture we add into; it needs a float colour buffer
-    if (!gl.getExtension('EXT_color_buffer_float') && !gl.getExtension('EXT_color_buffer_half_float')) {
-      throw new Error('float render targets are not supported');
-    }
     progBg = program('vFull', 'fBg', [], ['uTex', 'uCrop', 'uMirror', 'uDim'], U.bg);
-    progMap = program('vFull', 'fMap', [], ['uSize', 'uAspect', 'uN', 'uA', 'uB', 'uM', 'uS'], U.map);
-    progSheet = program('vSheet', 'fSheet', ['aP'], ['uMap', 'uImg', 'uAspect', 'uUnit', 'uView', 'uCenter', 'uScale', 'uOffset',
-      'uBall', 'uBallC', 'uBallR', 'uRot', 'uCrop', 'uMirror', 'uLit', 'uTexel', 'uShadow', 'uAlpha'], U.sheet);
+    progSheet = program('vSheet', 'fSheet', ['aPos', 'aNrm', 'aUV'], ['uView', 'uCenter', 'uSheetC', 'uScale', 'uOffset', 'uDepth',
+      'uShadow', 'uImg', 'uCrop', 'uMirror', 'uLit', 'uAlpha', 'uUnit'], U.sheet);
     fullVao = gl.createVertexArray();
-    videoTex = makeTex(gl.LINEAR);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
-    paperTex = makeTex(gl.LINEAR);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
+    videoTex = makeTex();
+    paperTex = makeTex();
     gl.useProgram(progSheet);
     gl.uniform1i(U.sheet.uImg, 0);
-    gl.uniform1i(U.sheet.uMap, 1);
     gl.useProgram(progBg);
     gl.uniform1i(U.bg.uTex, 0);
+    sheetVao = gl.createVertexArray();
+    gl.bindVertexArray(sheetVao);
+    posBuf = gl.createBuffer(); nrmBuf = gl.createBuffer(); uvBuf = gl.createBuffer(); idxBuf = gl.createBuffer();
+    [[posBuf, 3], [nrmBuf, 3], [uvBuf, 2]].forEach(([b, n], i) => {
+      gl.bindBuffer(gl.ARRAY_BUFFER, b);
+      gl.enableVertexAttribArray(i);
+      gl.vertexAttribPointer(i, n, gl.FLOAT, false, 0, 0);
+    });
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+    gl.bindVertexArray(null);
     ready = true;
   } catch (e) {
     showError('Could not set up drawing (' + e.message + ').');
   }
 }
 
-// ---------- sizes, sheet grid, crumple map ----------
-let viewW = 1, viewH = 1, unit = 1;          // css px; unit = the short side
-let paperAsp = [1, 1], mapW = 1, mapH = 1;   // fixed while a sheet is in use
+let viewW = 1, viewH = 1, unit = 1; // css px; unit = the short side
+let sheetW = 1, sheetH = 1;         // screen size when the sheet was made (it keeps that shape if the screen turns)
+const fit = () => Math.min(viewW / sheetW, viewH / sheetH);
 let sizeDirty = true;
-
 function resize() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   viewW = window.innerWidth; viewH = window.innerHeight;
@@ -360,155 +300,226 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
+// ---------- the paper: a grid of points held together like a sheet (position based dynamics) ----------
+// The sheet lies on the monitor (z = 0) with friction, so pushing it makes it bunch up and buckle
+// into smooth wrinkles. Folding constraints give way and keep their new length, so the wrinkles stay.
+let NX = 2, NY = 2, N = 4, gap = 1;
+let P, Q, R0;                      // positions, previous positions, rest positions
+// drawn copy: smoothed and split twice as fine, so folds read as smooth curves rather than a saw edge of the grid
+let RX = 2, RY = 2, SM, RP, NRM;
+let cA, cB, cRest, cK, cPlastic, nC = 0;
+let restArea = 1;
+const ITER = 8;
+
 function buildSheet() {
-  // A new sheet takes the current screen shape: grid of about 128 x 280 cells, map 512 texels on the short side.
   unit = Math.min(viewW, viewH);
-  paperAsp = [viewW / unit, viewH / unit];
-  const long = Math.max(paperAsp[0], paperAsp[1]);
-  const nS = 128, nL = Math.min(300, Math.round(128 * long));
-  const nx = viewW <= viewH ? nS : nL, ny = viewW <= viewH ? nL : nS;
-  const v = new Float32Array((nx + 1) * (ny + 1) * 2);
-  let k = 0;
-  for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) { v[k++] = i / nx; v[k++] = j / ny; }
-  const idx = new Uint16Array(nx * ny * 6);
-  k = 0;
-  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
-    const a = j * (nx + 1) + i, b = a + 1, c = a + nx + 1, d = c + 1;
-    idx[k++] = a; idx[k++] = c; idx[k++] = b; idx[k++] = b; idx[k++] = c; idx[k++] = d;
+  sheetW = viewW; sheetH = viewH;
+  const nS = 40;                                   // points across the short side
+  gap = unit / (nS - 1);
+  NX = Math.max(2, Math.round(viewW / gap) + 1); NY = Math.max(2, Math.round(viewH / gap) + 1);
+  const gx = viewW / (NX - 1), gy = viewH / (NY - 1);
+  N = NX * NY;
+  P = new Float32Array(N * 3); Q = new Float32Array(N * 3); R0 = new Float32Array(N * 3);
+  RX = 2 * NX - 1; RY = 2 * NY - 1;
+  SM = new Float32Array(N * 3); RP = new Float32Array(RX * RY * 3); NRM = new Float32Array(RX * RY * 3);
+  const UVS = new Float32Array(RX * RY * 2);
+  for (let j = 0; j < RY; j++) for (let i = 0; i < RX; i++) { UVS[(j * RX + i) * 2] = i / (RX - 1); UVS[(j * RX + i) * 2 + 1] = j / (RY - 1); }
+  for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+    const k = j * NX + i;
+    R0[k * 3] = i * gx; R0[k * 3 + 1] = j * gy; R0[k * 3 + 2] = 0;
   }
-  if (!sheetVao) {
-    sheetVao = gl.createVertexArray();
-    gl.bindVertexArray(sheetVao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 8, 0);
-    sheetIdx = gl.createBuffer();
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, sheetIdx);
+  const A = [], B = [], K = [], PL = [];
+  const add = (a, b, k, pl) => { A.push(a); B.push(b); K.push(k); PL.push(pl); };
+  for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+    const k = j * NX + i;
+    if (i + 1 < NX) add(k, k + 1, 1, 0);                       // the sheet does not stretch
+    if (j + 1 < NY) add(k, k + NX, 1, 0);
+    if (i + 1 < NX && j + 1 < NY) { add(k, k + NX + 1, 0.5, 1); add(k + 1, k + NX, 0.5, 1); } // shear
+    if (i + 2 < NX) add(k, k + 2, 0.7, 1);                     // bending: gives way and remembers
+    if (j + 2 < NY) add(k, k + 2 * NX, 0.7, 1);
   }
+  nC = A.length;
+  cA = Int32Array.from(A); cB = Int32Array.from(B); cK = Float32Array.from(K); cPlastic = Uint8Array.from(PL);
+  cRest = new Float32Array(nC);
+  const idx = new Uint32Array((RX - 1) * (RY - 1) * 6);
+  let n = 0;
+  for (let j = 0; j < RY - 1; j++) for (let i = 0; i < RX - 1; i++) {
+    const a = j * RX + i, b = a + 1, c = a + RX, d = c + 1;
+    idx[n++] = a; idx[n++] = c; idx[n++] = b; idx[n++] = b; idx[n++] = c; idx[n++] = d;
+  }
+  sheetCount = idx.length;
   gl.bindVertexArray(sheetVao);
-  gl.bufferData(gl.ARRAY_BUFFER, v, gl.STATIC_DRAW);
+  gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, UVS, gl.STATIC_DRAW);
   gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
   gl.bindVertexArray(null);
-  sheetCount = idx.length;
-
-  const s = 512 / Math.min(paperAsp[0], paperAsp[1]);
-  mapW = Math.min(1400, Math.round(paperAsp[0] * s)); mapH = Math.min(1400, Math.round(paperAsp[1] * s));
-  if (!mapTex) { mapTex = makeTex(gl.LINEAR); mapFb = gl.createFramebuffer(); }
-  gl.bindTexture(gl.TEXTURE_2D, mapTex);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, mapW, mapH, 0, gl.RGBA, gl.HALF_FLOAT, null);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, mapFb);
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, mapTex, 0);
-  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    ready = false;
-    showError('Could not set up drawing (the crumple map cannot be drawn on this device).');
-    return;
-  }
-  clearMap();
+  restArea = viewW * viewH;
   sizeDirty = false;
-}
-function clearMap() {
-  gl.bindFramebuffer(gl.FRAMEBUFFER, mapFb);
-  gl.viewport(0, 0, mapW, mapH);
-  gl.clearColor(0, 0, 0, 0);
-  gl.clear(gl.COLOR_BUFFER_BIT);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  flatten();
 }
 
-// ---------- creases (kept on the CPU too, to find which bit of paper is under the finger) ----------
-let creases = [], squeezes = [], pendC = [], pendS = [];
-const rand = (a, b) => a + Math.random() * (b - a);
-const bump = (x) => { x = Math.max(0, 1 - x * x); return x * x; };
-
-function pullAt(qx, qy) { // same sum as the map shader, ba channels
-  let dx = 0, dy = 0;
-  for (const c of creases) {
-    const nx = -c.ty, ny = c.tx, ex = qx - c.px, ey = qy - c.py;
-    const s = ex * nx + ey * ny, u = ex * c.tx + ey * c.ty;
-    const w = bump(u / c.L) * bump(s / (0.7 * c.L));
-    if (!w) continue;
-    const f = (s < 0 ? -1 : 1) * c.k * Math.min(Math.abs(s), c.m) * w;
-    dx -= nx * f; dy -= ny * f;
+function flatten() {
+  P.set(R0); Q.set(R0);
+  // a faint, smooth unevenness at the start, so the first push buckles into soft waves instead of sliding flat
+  const f1 = Math.random() * 6, f2 = Math.random() * 6;
+  for (let k = 0; k < N * 3; k += 3) {
+    const x = P[k] / unit, y = P[k + 1] / unit;
+    P[k + 2] = Q[k + 2] = gap * 0.05 * (2 + Math.sin(x * 7.3 + f1) + Math.sin(y * 5.1 - x * 3.7 + f2));
   }
-  for (const q of squeezes) {
-    const ex = qx - q.px, ey = qy - q.py, w = bump(Math.hypot(ex, ey) / q.r);
-    dx -= ex * q.k * w; dy -= ey * q.k * w;
+  for (let c = 0; c < nC; c++) {
+    const a = cA[c] * 3, b = cB[c] * 3;
+    cRest[c] = Math.hypot(R0[a] - R0[b], R0[a + 1] - R0[b + 1]);
   }
-  return [dx, dy];
 }
 
-// the sheet is drawn scaled around the screen centre and moved by `offset`
-let scale = 1, offset = [0, 0];
-function toPaper(sx, sy) { // screen css px -> paper point at rest (units)
-  const cx = viewW / 2, cy = viewH / 2;
-  const qx = (cx + (sx - offset[0] - cx) / scale) / unit, qy = (cy + (sy - offset[1] - cy) / scale) / unit;
-  let px = qx, py = qy;
-  for (let i = 0; i < 5; i++) { const d = pullAt(px, py); px = qx - d[0]; py = qy - d[1]; }
-  return [px, py];
+// grabs: the paper under each finger follows it, strongest in the middle
+const grabs = new Map(); // pointerId -> { ids, w, ox, oy, x, y }
+function grabAt(id, sx, sy) {
+  const r = unit * 0.1, r2 = r * r;
+  const ids = [], w = [], ox = [], oy = [];
+  for (let k = 0; k < N; k++) {
+    const dx = P[k * 3] - sx, dy = P[k * 3 + 1] - sy, d2 = dx * dx + dy * dy;
+    if (d2 > r2) continue;
+    ids.push(k); w.push(Math.exp(-3 * d2 / r2)); ox.push(dx); oy.push(dy);
+  }
+  if (ids.length) grabs.set(id, { ids, w, ox, oy, x: sx, y: sy });
+}
+function pullGrabs(strength) {
+  for (const g of grabs.values()) {
+    for (let n = 0; n < g.ids.length; n++) {
+      const k = g.ids[n] * 3, f = g.w[n] * strength;
+      P[k] += (g.x + g.ox[n] - P[k]) * f;
+      P[k + 1] += (g.y + g.oy[n] - P[k + 1]) * f;
+    }
+  }
 }
 
-let crumple = 0; // 0 = flat .. 1 = a paper ball
-const PER_CREASE = 0.004, PER_SQUEEZE = 0.0015;
+let ballMode = null; // { cx, cy, r } while the paper is being balled up
+function simulate(dt) {
+  const g = 0.6 * dt;                             // bulges settle slowly back toward the monitor
+  for (let k = 0; k < N * 3; k += 3) {
+    const vx = (P[k] - Q[k]) * 0.96, vy = (P[k + 1] - Q[k + 1]) * 0.96, vz = (P[k + 2] - Q[k + 2]) * 0.96;
+    Q[k] = P[k]; Q[k + 1] = P[k + 1]; Q[k + 2] = P[k + 2];
+    P[k] += vx; P[k + 1] += vy; P[k + 2] += vz - (ballMode ? 0 : P[k + 2] * g);
+  }
+  if (ballMode) { // pull everything onto a ball's surface; the sheet's own lengths crumple it
+    const { cx, cy, r } = ballMode, cz = r;
+    for (let k = 0; k < N * 3; k += 3) {
+      let dx = P[k] - cx, dy = P[k + 1] - cy, dz = P[k + 2] - cz;
+      const d = Math.hypot(dx, dy, dz) || 1, f = (r - d) / d * 0.12;
+      P[k] += dx * f; P[k + 1] += dy * f; P[k + 2] += dz * f;
+    }
+  }
+  pullGrabs(0.5);
+  for (let it = 0; it < ITER; it++) {
+    for (let c = 0; c < nC; c++) {
+      const a = cA[c] * 3, b = cB[c] * 3;
+      const dx = P[b] - P[a], dy = P[b + 1] - P[a + 1], dz = P[b + 2] - P[a + 2];
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6;
+      const f = (d - cRest[c]) / d * 0.5 * cK[c];
+      P[a] += dx * f; P[a + 1] += dy * f; P[a + 2] += dz * f;
+      P[b] -= dx * f; P[b + 1] -= dy * f; P[b + 2] -= dz * f;
+    }
+    pullGrabs(1);
+    if (!ballMode) {
+      const contact = gap * 0.3;
+      for (let k = 0; k < N * 3; k += 3) {
+        // paper lying flat on the monitor sticks a little (friction); paper that has bulged up or down slides.
+        // The monitor is not a hard floor: a bulge may go either way, and both read as a wrinkle.
+        if (Math.abs(P[k + 2]) < contact) {
+          P[k] = Q[k] + (P[k] - Q[k]) * 0.35; P[k + 1] = Q[k + 1] + (P[k + 1] - Q[k + 1]) * 0.35;
+        }
+      }
+    }
+  }
+  collide();
+  // plastic folding: lengths that were bent far enough keep part of the bend
+  const creep = ballMode ? 0.2 : 0.03;
+  for (let c = 0; c < nC; c++) {
+    if (!cPlastic[c]) continue;
+    const a = cA[c] * 3, b = cB[c] * 3;
+    const d = Math.hypot(P[b] - P[a], P[b + 1] - P[a + 1], P[b + 2] - P[a + 2]);
+    const e = d - cRest[c];
+    if (Math.abs(e) > cRest[c] * 0.04) cRest[c] += e * creep;
+  }
+}
 
-function addCrease(q, ang, size) {
-  const c = {
-    px: q[0], py: q[1], tx: Math.cos(ang), ty: Math.sin(ang),
-    A: (Math.random() < 0.5 ? -1 : 1) * rand(0.1, 0.26) * (0.75 + 0.6 * crumple),
-    m: rand(0.008, 0.026) * size, k: rand(0.55, 0.9), L: rand(0.22, 0.55) * size,
+// keep the sheet from passing through itself: points that are far apart on the sheet but close in space push apart
+let cellHead, cellNext;
+function collide() {
+  const r = gap * 0.75, r2 = r * r, cs = gap, W = Math.ceil(sheetW * 2 / cs) + 4, H = Math.ceil(sheetH * 2 / cs) + 4, nCell = W * H;
+  if (!cellHead || cellHead.length !== nCell) cellHead = new Int32Array(nCell);
+  if (!cellNext || cellNext.length !== N) cellNext = new Int32Array(N);
+  cellHead.fill(-1);
+  const ox = sheetW / 2, oy = sheetH / 2;
+  const cellOf = (x, y) => {
+    const cx = Math.min(W - 1, Math.max(0, Math.floor((x + ox) / cs))), cy = Math.min(H - 1, Math.max(0, Math.floor((y + oy) / cs)));
+    return cy * W + cx;
   };
-  creases.push(c); pendC.push(c);
-  crumple += PER_CREASE;
-}
-function addSqueeze(q, k, r) {
-  // keep the paper from turning inside out: measure how squashed it already is here
-  const e = 0.01, a = pullAt(q[0] - e, q[1]), b = pullAt(q[0] + e, q[1]), c = pullAt(q[0], q[1] - e), d = pullAt(q[0], q[1] + e);
-  const room = Math.min(1 + (b[0] - a[0]) / (2 * e), 1 + (d[1] - c[1]) / (2 * e)) - 0.4;
-  k = Math.min(k, Math.max(0, room));
-  if (k <= 0.002) return;
-  const s = { px: q[0], py: q[1], k, r };
-  squeezes.push(s); pendS.push(s);
-  crumple += PER_SQUEEZE;
-}
-function burst(sx, sy) { // a press: a few folds through the finger and a little gathering
-  const q = toPaper(sx, sy);
-  const n = 3 + (Math.random() < 0.5 ? 1 : 0), a0 = Math.random() * Math.PI;
-  for (let i = 0; i < n; i++) {
-    addCrease([q[0] + rand(-0.03, 0.03), q[1] + rand(-0.03, 0.03)], a0 + (i / n) * Math.PI + rand(-0.3, 0.3), rand(0.8, 1.3));
+  for (let k = 0; k < N; k++) { const c = cellOf(P[k * 3], P[k * 3 + 1]); cellNext[k] = cellHead[c]; cellHead[c] = k; }
+  for (let k = 0; k < N; k++) {
+    const x = P[k * 3], y = P[k * 3 + 1], ki = k % NX, kj = (k / NX) | 0;
+    const cx = Math.min(W - 1, Math.max(0, Math.floor((x + ox) / cs))), cy = Math.min(H - 1, Math.max(0, Math.floor((y + oy) / cs)));
+    for (let yy = Math.max(0, cy - 1); yy <= Math.min(H - 1, cy + 1); yy++) for (let xx = Math.max(0, cx - 1); xx <= Math.min(W - 1, cx + 1); xx++) {
+      for (let q = cellHead[yy * W + xx]; q !== -1; q = cellNext[q]) {
+        if (q <= k) continue;
+        const qi = q % NX, qj = (q / NX) | 0;
+        if (Math.abs(qi - ki) <= 2 && Math.abs(qj - kj) <= 2) continue; // neighbours on the sheet are allowed to be close
+        const dx = P[q * 3] - P[k * 3], dy = P[q * 3 + 1] - P[k * 3 + 1], dz = P[q * 3 + 2] - P[k * 3 + 2];
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 >= r2 || d2 === 0) continue;
+        const d = Math.sqrt(d2), f = (r - d) / d * 0.5;
+        P[k * 3] -= dx * f; P[k * 3 + 1] -= dy * f; P[k * 3 + 2] -= dz * f;
+        P[q * 3] += dx * f; P[q * 3 + 1] += dy * f; P[q * 3 + 2] += dz * f;
+      }
+    }
   }
-  addSqueeze(q, rand(0.04, 0.07), rand(0.18, 0.3));
-}
-function rub(sx, sy, dx, dy) { // a stroke: folds across the way the finger moves
-  const q = toPaper(sx, sy);
-  const ang = Math.atan2(dy, dx) + Math.PI / 2 + rand(-0.7, 0.7);
-  addCrease([q[0] + rand(-0.02, 0.02), q[1] + rand(-0.02, 0.02)], ang, rand(0.6, 1.0));
-  if (Math.random() < 0.3) addSqueeze(q, rand(0.015, 0.03), rand(0.12, 0.2));
 }
 
-function flushMarks() {
-  if (!pendC.length && !pendS.length) return;
-  gl.bindFramebuffer(gl.FRAMEBUFFER, mapFb);
-  gl.viewport(0, 0, mapW, mapH);
-  gl.disable(gl.DEPTH_TEST);
-  gl.enable(gl.BLEND);
-  gl.blendFunc(gl.ONE, gl.ONE);
-  gl.useProgram(progMap);
-  gl.uniform2f(U.map.uSize, mapW, mapH);
-  gl.uniform2f(U.map.uAspect, paperAsp[0], paperAsp[1]);
-  gl.bindVertexArray(fullVao);
-  while (pendC.length || pendS.length) {
-    const cs = pendC.splice(0, 16), ss = pendS.splice(0, 4);
-    const A = new Float32Array(64), B = new Float32Array(64), S = new Float32Array(16);
-    cs.forEach((c, i) => { A.set([c.px, c.py, c.tx, c.ty], i * 4); B.set([c.A, c.m, c.k, c.L], i * 4); });
-    ss.forEach((s, i) => S.set([s.px, s.py, s.k, s.r], i * 4));
-    gl.uniform1i(U.map.uN, cs.length);
-    gl.uniform4fv(U.map.uA, A);
-    gl.uniform4fv(U.map.uB, B);
-    gl.uniform1i(U.map.uM, ss.length);
-    gl.uniform4fv(U.map.uS, S);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+function updateRender() {
+  // 1) soften the grid's zigzag at sharp folds (half way toward the neighbours' average)
+  for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+    const k = (j * NX + i) * 3;
+    const l = (j * NX + Math.max(i - 1, 0)) * 3, r = (j * NX + Math.min(i + 1, NX - 1)) * 3;
+    const u = (Math.max(j - 1, 0) * NX + i) * 3, d = (Math.min(j + 1, NY - 1) * NX + i) * 3;
+    for (let c = 0; c < 3; c++) SM[k + c] = P[k + c] * 0.5 + (P[l + c] + P[r + c] + P[u + c] + P[d + c]) * 0.125;
   }
-  gl.disable(gl.BLEND);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  // 2) split each cell in four with a smooth (four point) curve through the neighbours
+  const mid = (a, b, c, d) => (-a + 9 * b + 9 * c - d) / 16;
+  for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+    const src = (j * NX + i) * 3, dst = (2 * j * RX + 2 * i) * 3;
+    RP[dst] = SM[src]; RP[dst + 1] = SM[src + 1]; RP[dst + 2] = SM[src + 2];
+    if (i + 1 < NX) {
+      const a = (j * NX + Math.max(i - 1, 0)) * 3, b = src, c = src + 3, d = (j * NX + Math.min(i + 2, NX - 1)) * 3;
+      for (let q = 0; q < 3; q++) RP[dst + 3 + q] = mid(SM[a + q], SM[b + q], SM[c + q], SM[d + q]);
+    }
+  }
+  for (let j = 0; j + 1 < NY; j++) for (let i = 0; i < RX; i++) {
+    const row = (jj) => (Math.min(Math.max(jj, 0), NY - 1) * 2 * RX + i) * 3;
+    const dst = ((2 * j + 1) * RX + i) * 3, a = row(j - 1), b = row(j), c = row(j + 1), d = row(j + 2);
+    for (let q = 0; q < 3; q++) RP[dst + q] = mid(RP[a + q], RP[b + q], RP[c + q], RP[d + q]);
+  }
+  // 3) normals of the fine grid
+  for (let j = 0; j < RY; j++) for (let i = 0; i < RX; i++) {
+    const k = j * RX + i;
+    const l = (j * RX + Math.max(i - 1, 0)) * 3, r = (j * RX + Math.min(i + 1, RX - 1)) * 3;
+    const u = (Math.max(j - 1, 0) * RX + i) * 3, d = (Math.min(j + 1, RY - 1) * RX + i) * 3;
+    const ax = RP[r] - RP[l], ay = RP[r + 1] - RP[l + 1], az = RP[r + 2] - RP[l + 2];
+    const bx = RP[d] - RP[u], by = RP[d + 1] - RP[u + 1], bz = RP[d + 2] - RP[u + 2];
+    let nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
+    const len = Math.hypot(nx, ny, nz) || 1;
+    NRM[k * 3] = nx / len; NRM[k * 3 + 1] = ny / len; NRM[k * 3 + 2] = nz / len;
+  }
+}
+
+function coveredArea() { // area the paper still covers on the monitor (seen from the front)
+  let s = 0;
+  for (let j = 0; j < NY - 1; j++) for (let i = 0; i < NX - 1; i++) {
+    const a = (j * NX + i) * 3, b = a + 3, c = a + NX * 3, d = c + 3;
+    s += Math.abs((P[b] - P[a]) * (P[c + 1] - P[a + 1]) - (P[b + 1] - P[a + 1]) * (P[c] - P[a])) * 0.5;
+    s += Math.abs((P[b] - P[d]) * (P[c + 1] - P[d + 1]) - (P[b + 1] - P[d + 1]) * (P[c] - P[d])) * 0.5;
+  }
+  return s;
 }
 
 // ---------- camera / test source ----------
@@ -649,12 +660,13 @@ function toast(text) {
 // live: the picture is still on the monitor. peeled: a still sheet you can crumple.
 // fly: kept, leaving the screen. ball: crumpled up, being thrown away.
 let phase = 'live';
-let lift = 0, grabLift = 0, fade = 1;
+let lift = 0, holdLift = 0, fade = 1;
 let paperCrop = [0, 0, 1, 1], paperMirror = false;
-let grab = null, flyV = [0, 0];
-let ball = null; // { t, cx, cy, vy }
-let lastTouch = [0, 0];
+let hold = null, flyV = [0, 0];   // hold = the whole sheet carried by one finger after a long press
+let ball = null;                  // { t, vy }
+let crumple = 0;                  // 0 = flat .. 1 = a paper ball
 let peeledHinted = false;
+let scale = 1, offset = [0, 0];   // the sheet is drawn scaled around the screen centre and moved by offset
 
 function peel() {
   if (video.readyState >= 2 && video.videoWidth) {
@@ -665,75 +677,72 @@ function peel() {
   paperMirror = mirror;
   phase = 'peeled';
   meter.classList.add('show');
-  if (!peeledHinted) { peeledHinted = true; showHint('Rub to crumple · hold still, then swipe it off to keep', 5000); }
+  if (!peeledHinted) { peeledHinted = true; showHint('Push and pinch to crumple · hold still, then swipe it off to keep', 5000); }
 }
 
 function newSheet() {
-  if (sizeDirty) buildSheet(); else clearMap();
-  creases = []; squeezes = []; pendC = []; pendS = [];
-  crumple = 0; phase = 'live'; lift = 0; grabLift = 0; scale = 1; offset = [0, 0];
-  grab = null; ball = null; fade = 0;
-  touches.clear();
+  if (sizeDirty) buildSheet(); else flatten();
+  crumple = 0; phase = 'live'; lift = 0; holdLift = 0; scale = 1; offset = [0, 0];
+  hold = null; ball = null; ballMode = null; fade = 0;
+  touches.clear(); grabs.clear();
   meter.classList.remove('show');
 }
 
 function startBall() {
   phase = 'ball';
-  grab = null; touches.clear();
-  const cx = viewW / 2, cy = viewH / 2; // the ball forms where the finger was, in sheet space
-  const bx = cx + (lastTouch[0] - offset[0] - cx) / scale, by = cy + (lastTouch[1] - offset[1] - cy) / scale;
-  ball = { t: 0, cx: Math.min(viewW * 0.8, Math.max(viewW * 0.2, bx)), cy: Math.min(viewH * 0.75, Math.max(viewH * 0.25, by)), vy: 0 };
+  hold = null; touches.clear(); grabs.clear();
+  let cx = 0, cy = 0;
+  for (let k = 0; k < N * 3; k += 3) { cx += P[k]; cy += P[k + 1]; }
+  ballMode = { cx: cx / N, cy: cy / N, r: unit * 0.17 };
+  ball = { t: 0, vy: 0 };
   meter.classList.remove('show');
 }
 
 // ---------- touch / mouse ----------
-const touches = new Map(); // pointerId -> { x, y, dist, ax, ay, held }
-const STEP = 24;           // css px of rubbing per fold
+const touches = new Map(); // pointerId -> { ax, ay, held }
 const HOLD_MS = 450;
+const toSheet = (sx, sy) => { const f = scale * fit(); return [sheetW / 2 + (sx - offset[0] - viewW / 2) / f, sheetH / 2 + (sy - offset[1] - viewH / 2) / f]; };
 
 cv.addEventListener('contextmenu', (e) => e.preventDefault());
 cv.addEventListener('pointerdown', (e) => {
   if (!started || !ready) return;
   e.preventDefault();
-  if (phase === 'fly' || phase === 'ball' || grab) return;
+  if (phase === 'fly' || phase === 'ball' || hold) return;
   try { cv.setPointerCapture(e.pointerId); } catch (_) {}
-  const now = performance.now();
-  touches.set(e.pointerId, { x: e.clientX, y: e.clientY, dist: 0, ax: e.clientX, ay: e.clientY, held: 0 });
-  lastTouch = [e.clientX, e.clientY];
+  touches.set(e.pointerId, { ax: e.clientX, ay: e.clientY, held: 0 });
   if (phase === 'live') peel();
-  burst(e.clientX, e.clientY);
+  const [x, y] = toSheet(e.clientX, e.clientY);
+  grabAt(e.pointerId, x, y);
 });
 cv.addEventListener('pointermove', (e) => {
   const p = touches.get(e.pointerId);
   if (!p) return;
   e.preventDefault();
-  const now = performance.now();
-  const dx = e.clientX - p.x, dy = e.clientY - p.y;
-  p.x = e.clientX; p.y = e.clientY;
-  if (grab && grab.id === e.pointerId) {
-    const dt = Math.max((now - grab.t) / 1000, 1 / 240);
+  if (hold && hold.id === e.pointerId) {
+    const now = performance.now(), dt = Math.max((now - hold.t) / 1000, 1 / 240);
+    const dx = e.clientX - hold.x, dy = e.clientY - hold.y;
     offset[0] += dx; offset[1] += dy;
-    grab.vx = grab.vx * 0.4 + (dx / dt) * 0.6; grab.vy = grab.vy * 0.4 + (dy / dt) * 0.6;
-    grab.t = now;
+    hold.vx = hold.vx * 0.4 + (dx / dt) * 0.6; hold.vy = hold.vy * 0.4 + (dy / dt) * 0.6;
+    hold.x = e.clientX; hold.y = e.clientY; hold.t = now;
     return;
   }
   if (phase !== 'peeled') return;
-  lastTouch = [e.clientX, e.clientY];
-  if (Math.hypot(e.clientX - p.ax, e.clientY - p.ay) > 10) { p.ax = e.clientX; p.ay = e.clientY; p.held = 0; }
-  p.dist += Math.hypot(dx, dy);
-  while (p.dist >= STEP) { p.dist -= STEP; rub(e.clientX, e.clientY, dx, dy); }
+  if (Math.hypot(e.clientX - p.ax, e.clientY - p.ay) > 6) { p.ax = e.clientX; p.ay = e.clientY; p.held = 0; }
+  const g = grabs.get(e.pointerId);
+  if (g) [g.x, g.y] = toSheet(e.clientX, e.clientY);
 });
 function release(e) {
   if (!touches.has(e.pointerId)) return;
   touches.delete(e.pointerId);
-  if (!grab || grab.id !== e.pointerId) return;
-  const g = grab; grab = null;
-  const sp = Math.hypot(g.vx, g.vy), om = Math.hypot(offset[0], offset[1]);
-  const fling = sp > 900 && (g.vx * offset[0] + g.vy * offset[1]) > 0;
+  grabs.delete(e.pointerId);
+  if (!hold || hold.id !== e.pointerId) return;
+  const h = hold; hold = null;
+  const sp = Math.hypot(h.vx, h.vy), om = Math.hypot(offset[0], offset[1]);
+  const fling = sp > 900 && (h.vx * offset[0] + h.vy * offset[1]) > 0;
   const far = Math.abs(offset[0]) > viewW * 0.28 || Math.abs(offset[1]) > viewH * 0.22;
   if (phase === 'peeled' && (far || fling) && om > 20) {
     keepPhoto();
-    const dir = sp > 300 ? [g.vx / sp, g.vy / sp] : [offset[0] / om, offset[1] / om];
+    const dir = sp > 300 ? [h.vx / sp, h.vy / sp] : [offset[0] / om, offset[1] / om];
     const v = Math.max(sp, 2400);
     flyV = [dir[0] * v, dir[1] * v];
     phase = 'fly';
@@ -743,8 +752,10 @@ function release(e) {
 cv.addEventListener('pointerup', release);
 cv.addEventListener('pointercancel', release);
 
-function startGrab(id) {
-  grab = { id, vx: 0, vy: 0, t: performance.now() };
+function startHold(id) {
+  const p = touches.get(id);
+  grabs.delete(id); // the finger now carries the whole sheet instead of pulling one spot
+  hold = { id, x: p.ax, y: p.ay, vx: 0, vy: 0, t: performance.now() };
   if (navigator.vibrate) { try { navigator.vibrate(12); } catch (_) {} }
   showHint('Swipe it off the screen to keep it', 3000);
 }
@@ -769,7 +780,7 @@ function keepPhoto() {
   gl.viewport(0, 0, w, h);
   gl.clearColor(0, 0, 0, 0);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-  drawSheet({ scale: 1, offset: [0, 0], lit: 1, ballE: 0, shadow: false, alpha: 1 });
+  drawSheet({ scale: 1, offset: [0, 0], lit: 1, shadow: false, alpha: 1 });
   const px = new Uint8Array(w * h * 4);
   gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -842,33 +853,28 @@ renderGrid();
 function drawSheet(o) {
   const live = phase === 'live';
   gl.useProgram(progSheet);
-  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mapTex);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, live ? videoTex : paperTex);
   const crop = live ? coverCrop(video.videoWidth, video.videoHeight) : paperCrop;
   gl.uniform4f(U.sheet.uCrop, crop[0], crop[1], crop[2], crop[3]);
   gl.uniform1f(U.sheet.uMirror, (live ? mirror : paperMirror) ? 1 : 0);
-  gl.uniform2f(U.sheet.uAspect, paperAsp[0], paperAsp[1]);
-  gl.uniform1f(U.sheet.uUnit, unit);
   gl.uniform2f(U.sheet.uView, viewW, viewH);
   gl.uniform2f(U.sheet.uCenter, viewW / 2, viewH / 2);
-  gl.uniform2f(U.sheet.uTexel, 1 / mapW, 1 / mapH);
-  gl.uniform1f(U.sheet.uBall, o.ballE);
-  gl.uniform2f(U.sheet.uBallC, ball ? ball.cx : 0, ball ? ball.cy : 0);
-  gl.uniform1f(U.sheet.uBallR, unit * 0.2);
-  gl.uniform1f(U.sheet.uRot, ball ? ball.t * 2.5 : 0);
-  gl.uniform1f(U.sheet.uScale, o.scale);
+  gl.uniform2f(U.sheet.uSheetC, sheetW / 2, sheetH / 2);
+  gl.uniform1f(U.sheet.uScale, o.scale * fit());
+  gl.uniform1f(U.sheet.uDepth, unit * 2);
+  gl.uniform1f(U.sheet.uUnit, unit);
   gl.uniform1f(U.sheet.uLit, o.lit);
   gl.bindVertexArray(sheetVao);
-  if (o.shadow) { // soft shadow: a few faint copies, offset down and to the right
+  if (o.shadow) { // soft shadow on the monitor: a few faint copies, each pushed away from the light
     gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    const sx = (4 + 4 * grabLift) * lift, sy = (10 + 12 * grabLift) * lift, r = (3 + 6 * grabLift) * lift + 2;
+    const sx = (4 + 4 * holdLift) * lift, sy = (10 + 12 * holdLift) * lift, r = (3 + 6 * holdLift) * lift + 2;
     const taps = [[0, 0], [r, 0], [-r, 0], [0, r], [0, -r]];
-    gl.uniform1f(U.sheet.uShadow, 0.13 * lift * o.alpha);
+    gl.uniform1f(U.sheet.uShadow, 0.12 * lift * o.alpha);
     for (const t of taps) {
       gl.uniform2f(U.sheet.uOffset, o.offset[0] + sx + t[0], o.offset[1] + sy + t[1]);
-      gl.drawElements(gl.TRIANGLES, sheetCount, gl.UNSIGNED_SHORT, 0);
+      gl.drawElements(gl.TRIANGLES, sheetCount, gl.UNSIGNED_INT, 0);
     }
     gl.disable(gl.BLEND);
   }
@@ -879,58 +885,66 @@ function drawSheet(o) {
   gl.depthFunc(gl.LEQUAL);
   gl.clear(gl.DEPTH_BUFFER_BIT);
   if (o.alpha < 1) { gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); }
-  gl.drawElements(gl.TRIANGLES, sheetCount, gl.UNSIGNED_SHORT, 0);
+  gl.drawElements(gl.TRIANGLES, sheetCount, gl.UNSIGNED_INT, 0);
   gl.disable(gl.BLEND);
   gl.disable(gl.DEPTH_TEST);
   gl.bindVertexArray(null);
 }
 
-const ease = (x) => x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
-let lastT = performance.now();
+let lastT = performance.now(), simDebt = 0, areaTick = 0;
+const SIM_DT = 1 / 60;
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - lastT) / 1000);
   lastT = now;
   if (!ready || !started) return;
   if (sizeDirty && phase === 'live') buildSheet();
-  if (!ready) return;
 
   if (video.readyState >= 2 && video.videoWidth) {
     gl.bindTexture(gl.TEXTURE_2D, videoTex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
   }
 
-  // long press: one finger kept still
-  if (phase === 'peeled' && !grab && touches.size === 1) {
-    // add up still time frame by frame (at most 50 ms each), so a slow frame never counts as a long press
+  // long press: one finger kept still. Still time is added frame by frame (at most 50 ms each),
+  // so a slow frame never counts as holding still.
+  if (phase === 'peeled' && !hold && touches.size === 1) {
     const [id, p] = [...touches.entries()][0];
     p.held += dt * 1000;
-    if (p.held > HOLD_MS) startGrab(id);
+    if (p.held > HOLD_MS) startHold(id);
   }
-  if (phase === 'peeled' && crumple >= 1) startBall();
-  flushMarks();
+
+  if (phase === 'peeled' || phase === 'ball') {
+    simDebt = Math.min(simDebt + dt, SIM_DT); // at most one step a frame: a slow phone slows the paper down instead of falling behind
+    while (simDebt >= SIM_DT) { simulate(SIM_DT); simDebt -= SIM_DT; }
+  }
+  if (phase === 'peeled') {
+    if (++areaTick % 4 === 0) crumple = Math.max(crumple, Math.min(1, (1 - coveredArea() / restArea) / 0.38));
+    if (crumple >= 1) startBall();
+  }
 
   const k = 1 - Math.exp(-dt * 10);
   lift += ((phase === 'live' ? 0 : 1) - lift) * k;
-  grabLift += ((grab ? 1 : 0) - grabLift) * k;
+  holdLift += ((hold ? 1 : 0) - holdLift) * k;
   fade = Math.min(1, fade + dt * 4);
-  let ballE = 0;
-  if (phase === 'peeled' && !grab) { offset[0] *= 1 - k; offset[1] *= 1 - k; }
+  if (phase === 'peeled' && !hold) { offset[0] *= 1 - k; offset[1] *= 1 - k; }
   if (phase === 'fly') {
     offset[0] += flyV[0] * dt; offset[1] += flyV[1] * dt;
     if (Math.abs(offset[0]) > viewW * 1.3 || Math.abs(offset[1]) > viewH * 1.3) { newSheet(); toast('Kept in Photos'); }
   }
   if (phase === 'ball') {
     ball.t += dt;
-    ballE = ease(Math.min(1, ball.t / 0.8));
-    if (ball.t > 1.15) { // thrown away: drop off the bottom
+    if (ball.t > 1.3) { // thrown away: drop off the bottom
       ball.vy += 3200 * dt;
       offset[1] += ball.vy * dt;
       if (offset[1] > viewH) { newSheet(); toast('Thrown away'); }
     }
   }
-  scale = phase === 'live' ? 1 : 1 - 0.07 * lift + 0.035 * grabLift;
-  meter.firstElementChild.style.width = Math.min(100, crumple * 100).toFixed(1) + '%';
+  scale = phase === 'live' ? 1 : 1 - 0.07 * lift + 0.035 * holdLift;
+  meter.firstElementChild.style.width = (crumple * 100).toFixed(1) + '%';
+
+  updateRender();
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf); gl.bufferData(gl.ARRAY_BUFFER, RP, gl.DYNAMIC_DRAW);
+  gl.bindBuffer(gl.ARRAY_BUFFER, nrmBuf); gl.bufferData(gl.ARRAY_BUFFER, NRM, gl.DYNAMIC_DRAW);
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.viewport(0, 0, cv.width, cv.height);
@@ -945,12 +959,12 @@ function frame(now) {
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.bindVertexArray(null);
 
-  drawSheet({ scale, offset, lit: Math.min(1, lift * 1.5), ballE, shadow: phase !== 'live', alpha: fade });
+  drawSheet({ scale, offset, lit: Math.min(1, lift * 1.5), shadow: phase !== 'live', alpha: fade });
 }
 requestAnimationFrame(frame);
 
 // read-only state for the automatic checks
-window.__crumple = () => ({ phase, crumple, creases: creases.length, photos: photos.length, grab: !!grab });
+window.__crumple = () => ({ phase, crumple, photos: photos.length, grab: !!hold });
 </script>
 </body>
 </html>
