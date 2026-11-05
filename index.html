@@ -1,0 +1,956 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Crumple Camera</title>
+<link rel="icon" href="data:,">
+<style>
+:root { --paper: #000; --ink: #f2f0ec; --mute: #9a958d; --bar: rgba(16,16,18,.72); --edge: rgba(255,255,255,.16); --hot: #ff5a36; --sheet: #f3f1ec; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body {
+  margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none;
+  background: var(--paper); color: var(--ink); touch-action: none;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  font: 16px/1.4 system-ui, -apple-system, "Hiragino Sans", "Segoe UI", sans-serif;
+}
+#stage { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+#cam { position: fixed; left: 0; top: 0; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
+button {
+  font: inherit; color: var(--ink); background: rgba(255,255,255,.08); touch-action: manipulation;
+  border: 1px solid var(--edge); border-radius: 14px; min-height: 48px; padding: 0 14px;
+}
+#start {
+  position: fixed; inset: 0; display: flex; flex-direction: column; justify-content: center; gap: 16px;
+  padding: calc(env(safe-area-inset-top, 0px) + 24px) max(20px, env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom, 0px) + 24px) max(20px, env(safe-area-inset-left, 0px));
+  background: var(--paper);
+}
+#start h1 { margin: 0 0 4px; font-size: 22px; font-weight: 600; }
+#start p { margin: 0 0 12px; color: var(--mute); }
+#start button { min-height: 88px; font-size: 22px; font-weight: 600; border-radius: 18px; }
+#start.hide { display: none; }
+#err {
+  display: none; margin-top: 8px; padding: 14px 16px; border-radius: 14px;
+  background: rgba(255,90,54,.16); border: 1px solid var(--hot); white-space: pre-line;
+}
+#err.show { display: block; }
+#top {
+  position: fixed; left: 0; right: 0; top: 0; display: none; justify-content: space-between; gap: 8px;
+  padding: calc(env(safe-area-inset-top, 0px) + 12px) max(12px, env(safe-area-inset-right, 0px)) 0 max(12px, env(safe-area-inset-left, 0px));
+  pointer-events: none;
+}
+#top.show { display: flex; }
+#top button { pointer-events: auto; background: var(--bar); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+#photosBtn.pulse { animation: pulse .6s ease; }
+@keyframes pulse { 0% { transform: scale(1); } 40% { transform: scale(1.18); background: var(--hot); } 100% { transform: scale(1); } }
+#meter {
+  position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 34px); width: 96px; margin-left: -48px; height: 4px;
+  border-radius: 2px; background: rgba(255,255,255,.18); opacity: 0; transition: opacity .3s; pointer-events: none;
+}
+#meter.show { opacity: 1; }
+#meter i { display: block; height: 100%; width: 0; border-radius: 2px; background: var(--ink); }
+#hint {
+  position: fixed; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom, 0px) + 20px);
+  text-align: center; pointer-events: none; transition: opacity .5s; color: var(--ink); opacity: 0;
+  text-shadow: 0 1px 6px rgba(0,0,0,.8);
+}
+#toast {
+  position: fixed; left: 50%; top: 42%; transform: translate(-50%, -50%); padding: 10px 18px; border-radius: 999px;
+  background: var(--bar); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  opacity: 0; transition: opacity .3s; pointer-events: none; white-space: nowrap;
+}
+#toast.show { opacity: 1; }
+/* drawer: the photo folder */
+#drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(88vw, 380px); display: flex; flex-direction: column;
+  background: var(--sheet); color: #1a1918; box-shadow: -8px 0 30px rgba(0,0,0,.45);
+  transform: translateX(100%); visibility: hidden; transition: transform .3s ease, visibility 0s linear .3s;
+  padding: calc(env(safe-area-inset-top, 0px) + 10px) max(10px, env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom, 0px) + 10px) 10px;
+}
+#drawer.open { transform: none; visibility: visible; transition: transform .3s ease; }
+#drawer header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px 8px; }
+#drawer h2 { margin: 0; font-size: 18px; font-weight: 600; }
+#drawer button, #viewer button { color: #1a1918; background: #fff; border-color: rgba(0,0,0,.14); }
+#drawer .note { margin: 0 4px 8px; font-size: 13px; color: #6d6962; }
+#grid { flex: 1; overflow-y: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-content: start; padding: 2px; touch-action: pan-y; }
+#grid button { padding: 0; border: 0; min-height: 0; aspect-ratio: 3 / 4; border-radius: 6px; overflow: hidden; background: #fff; }
+#grid img { width: 100%; height: 100%; object-fit: contain; display: block; pointer-events: none; }
+#empty { margin: 24px 4px; color: #6d6962; }
+#viewer {
+  position: fixed; inset: 0; display: none; flex-direction: column; background: var(--sheet); color: #1a1918;
+  padding: calc(env(safe-area-inset-top, 0px) + 10px) max(12px, env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom, 0px) + 12px) max(12px, env(safe-area-inset-left, 0px));
+}
+#viewer.show { display: flex; }
+#viewer img { flex: 1; min-height: 0; width: 100%; object-fit: contain; }
+#viewer .row { display: flex; gap: 8px; margin-top: 10px; }
+#viewer .row button { flex: 1; }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<video id="cam" playsinline muted autoplay></video>
+
+<div id="start">
+  <h1>Crumple Camera</h1>
+  <p>Pick a camera. Touch the picture and it peels off the screen like a sheet of paper. Rub it to crumple it. Hold still, then swipe it off the screen to keep it as a photo. Crumple it all the way and it turns into a paper ball and is thrown away. The video never leaves this device.</p>
+  <button data-facing="user">Front camera</button>
+  <button data-facing="environment">Back camera</button>
+  <div id="err"></div>
+</div>
+
+<div id="top">
+  <button id="flip">Switch camera</button>
+  <button id="photosBtn">Photos 0</button>
+</div>
+<div id="meter"><i></i></div>
+<div id="hint"></div>
+<div id="toast"></div>
+
+<div id="drawer" aria-hidden="true">
+  <header><h2>Photos</h2><button id="closeDrawer">Close</button></header>
+  <p class="note">Kept only while this page is open. Open a photo to save it to your device.</p>
+  <div id="grid"></div>
+  <p id="empty">No photos yet. Hold the sheet still, then swipe it off the screen.</p>
+</div>
+
+<div id="viewer">
+  <img id="viewImg" alt="Crumpled photo">
+  <div class="row"><button id="saveBtn">Save to device</button><button id="closeViewer">Close</button></div>
+</div>
+
+<!-- full-screen triangle, shared by the background and the crease passes -->
+<script type="x-shader/x-vertex" id="vFull">#version 300 es
+out vec2 vUV;
+void main() {
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  vUV = p;
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}
+</script>
+<!-- the live camera on the "monitor" behind the sheet -->
+<script type="x-shader/x-fragment" id="fBg">#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform vec4 uCrop;     // video uv = uCrop.xy + screen uv * uCrop.zw (cover fit)
+uniform float uMirror;
+uniform float uDim;     // 1 = plain live picture, lower = the bare monitor after the sheet came off
+in vec2 vUV;
+out vec4 o;
+void main() {
+  vec2 P = vec2(vUV.x, 1.0 - vUV.y);
+  vec2 uv = uCrop.xy + P * uCrop.zw;
+  if (uMirror > 0.5) uv.x = 1.0 - uv.x;
+  vec3 c = texture(uTex, uv).rgb;
+  float g = dot(c, vec3(0.299, 0.587, 0.114));
+  c = mix(vec3(g), c, uDim);
+  float vig = 1.0 - (1.0 - uDim) * 0.6 * dot(P - 0.5, P - 0.5) * 2.0;
+  o = vec4(c * uDim * vig, 1.0);
+}
+</script>
+<!-- adds creases (folds) and squeezes into the crumple map: rg = surface slope, ba = how far the paper was pulled -->
+<script type="x-shader/x-fragment" id="fMap">#version 300 es
+precision highp float;
+uniform vec2 uSize;     // map size in texels
+uniform vec2 uAspect;   // paper size in units (the short side is 1)
+uniform int uN;
+uniform vec4 uA[16];    // crease: point xy, direction along the fold xy
+uniform vec4 uB[16];    // crease: slope (sign = ridge or valley), band half width, pull 0..1, half length
+uniform int uM;
+uniform vec4 uS[4];     // squeeze: point xy, strength, radius
+out vec4 o;
+float bump(float x) { x = clamp(1.0 - x * x, 0.0, 1.0); return x * x; }
+void main() {
+  vec2 q = gl_FragCoord.xy / uSize * uAspect;
+  vec2 g = vec2(0.0), D = vec2(0.0);
+  for (int i = 0; i < 16; i++) {
+    if (i >= uN) break;
+    vec2 p = uA[i].xy, t = uA[i].zw, n = vec2(-t.y, t.x);
+    float A = uB[i].x, m = uB[i].y, k = uB[i].z, L = uB[i].w;
+    vec2 d = q - p;
+    float s = dot(d, n), u = dot(d, t);
+    float w = bump(u / L) * bump(s / (0.7 * L));
+    float sg = s < 0.0 ? -1.0 : 1.0;
+    g += A * sg * n * w;                      // V-shaped fold: the two sides tilt opposite ways
+    D -= n * sg * k * min(abs(s), m) * w;     // the band along the fold is eaten, both sides pulled in
+  }
+  for (int j = 0; j < 4; j++) {
+    if (j >= uM) break;
+    vec2 d = q - uS[j].xy;
+    D -= d * uS[j].z * bump(length(d) / uS[j].w);  // paper gathered toward the finger
+  }
+  o = vec4(g, D);
+}
+</script>
+<!-- the sheet: a fine grid moved by the crumple map, or wrapped into a ball -->
+<script type="x-shader/x-vertex" id="vSheet">#version 300 es
+in vec2 aP;               // paper uv 0..1, y down
+uniform sampler2D uMap;
+uniform vec2 uAspect;     // paper size in units
+uniform float uUnit;      // css px per unit
+uniform vec2 uView;       // css px
+uniform vec2 uCenter;     // scale around this point (css px)
+uniform float uScale;
+uniform vec2 uOffset;     // css px
+uniform float uBall;      // 0 = sheet, 1 = paper ball
+uniform vec2 uBallC;
+uniform float uBallR;
+uniform float uRot;
+out vec2 vP;
+out vec3 vPos;
+void main() {
+  vec4 m = textureLod(uMap, aP, 0.0);
+  vec2 px = (aP * uAspect + m.ba) * uUnit;
+  vec3 pos = vec3(px, 0.0);
+  if (uBall > 0.0) {
+    float th = aP.x * 6.2831853 + uRot, ph = aP.y * 3.1415927;
+    vec3 n = vec3(sin(ph) * sin(th), -cos(ph), sin(ph) * cos(th));
+    // lumps in every direction (waves across the ball) plus fine folds from the paper itself
+    float lump = 1.0 + 0.09 * (sin(dot(n, vec3(5.1, 2.3, -3.7)) + 1.3) + sin(dot(n, vec3(-2.9, 6.3, 1.7)) + 0.4)
+                             + sin(dot(n, vec3(3.3, -4.1, 6.9)) + 2.1))
+               + 0.025 * sin(aP.x * 41.0 + aP.y * 17.0) * sin(aP.y * 33.0 - aP.x * 13.0)
+               + 0.06 * clamp(length(m.rg), 0.0, 2.0);
+    vec3 onBall = vec3(uBallC, 0.0) + n * uBallR * lump;
+    vec3 gathered = vec3(uBallC + (px - uBallC) * (1.0 - 0.8 * uBall), 0.0);
+    pos = mix(gathered, onBall, smoothstep(0.15, 1.0, uBall));
+  }
+  vec2 s = uCenter + (pos.xy - uCenter) * uScale + uOffset;
+  vP = aP;
+  vPos = pos;
+  gl_Position = vec4(s.x / uView.x * 2.0 - 1.0, 1.0 - s.y / uView.y * 2.0, -pos.z / (uUnit * 4.0), 1.0);
+}
+</script>
+<script type="x-shader/x-fragment" id="fSheet">#version 300 es
+precision highp float;
+uniform sampler2D uMap;
+uniform sampler2D uImg;
+uniform vec4 uCrop;
+uniform float uMirror;
+uniform float uLit;      // 0 = plain picture (still on the monitor), 1 = paper lighting
+uniform float uBall;
+uniform vec2 uTexel;     // one texel of the crumple map
+uniform float uShadow;   // > 0: draw the soft shadow under the sheet
+uniform float uAlpha;
+in vec2 vP;
+in vec3 vPos;
+out vec4 o;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+void main() {
+  if (uShadow > 0.0) { o = vec4(0.0, 0.0, 0.0, uShadow); return; }
+  vec2 g = texture(uMap, vP).rg;
+  vec2 ex = vec2(uTexel.x * 1.25, 0.0), ey = vec2(0.0, uTexel.y * 1.25);
+  float crease = length(texture(uMap, vP + ex).rg - texture(uMap, vP - ex).rg)
+               + length(texture(uMap, vP + ey).rg - texture(uMap, vP - ey).rg);
+  vec3 N = normalize(vec3(-g, 1.0));
+  float b = smoothstep(0.15, 1.0, uBall);
+  if (b > 0.0) { // the ball: flat facets from the mesh itself (y runs down, so flip y)
+    vec3 f = normalize(cross(dFdx(vPos), dFdy(vPos)));
+    f.y = -f.y;
+    if (f.z < 0.0) f = -f;
+    N = normalize(mix(N, f, b));
+  }
+  vec3 L = normalize(vec3(-0.45, -0.62, 0.64));   // light from the upper left (y runs down)
+  vec3 H = normalize(L + vec3(0.0, 0.0, 1.0));
+  float diff = 1.0 + 1.2 * (dot(N, L) - L.z);      // flat paper keeps its picture as it was
+  float spec = max(pow(max(dot(N, H), 0.0), 60.0) - pow(H.z, 60.0), 0.0);
+  vec3 L2 = normalize(vec3(0.7, -0.2, 0.69));      // second, softer gloss from the right
+  vec3 H2 = normalize(L2 + vec3(0.0, 0.0, 1.0));
+  spec += 0.5 * max(pow(max(dot(N, H2), 0.0), 24.0) - pow(H2.z, 24.0), 0.0);
+  vec2 uv = uCrop.xy + vP * uCrop.zw;
+  if (uMirror > 0.5) uv.x = 1.0 - uv.x;
+  vec3 c = texture(uImg, uv).rgb;
+  vec3 lit = c * clamp(diff, 0.12, 1.6) + vec3(spec) * 0.32;
+  lit = mix(lit, vec3(0.94, 0.93, 0.9), clamp(crease * 0.3, 0.0, 0.5));  // ink cracks white along the folds
+  lit += (hash(floor(vP * 900.0)) - 0.5) * 0.035;                         // print grain
+  o = vec4(mix(c, lit, uLit), uAlpha);
+}
+</script>
+
+<script>
+'use strict';
+const params = new URLSearchParams(location.search);
+const TEST = params.has('test');
+
+const $ = (id) => document.getElementById(id);
+const cv = $('stage'), video = $('cam'), startEl = $('start'), errEl = $('err'), topEl = $('top');
+const hint = $('hint'), meter = $('meter'), toastEl = $('toast'), photosBtn = $('photosBtn');
+
+function showError(text) {
+  startEl.classList.remove('hide');
+  topEl.classList.remove('show');
+  errEl.textContent = text;
+  errEl.classList.add('show');
+}
+
+// ---------- WebGL2 ----------
+const gl = cv.getContext('webgl2', { antialias: true, alpha: false, preserveDrawingBuffer: TEST });
+let ready = false;
+let progBg, progMap, progSheet;
+const U = { bg: {}, map: {}, sheet: {} };
+let fullVao, sheetVao, sheetIdx, sheetCount = 0;
+let videoTex, paperTex, mapTex, mapFb, capFb, capColor, capDepth, capW = 0, capH = 0;
+
+function compile(type, id) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, $(id).textContent.trim());
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh));
+  return sh;
+}
+function program(vs, fs, attribs, uniforms, store) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+  attribs.forEach((n, i) => gl.bindAttribLocation(p, i, n));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  for (const u of uniforms) store[u] = gl.getUniformLocation(p, u);
+  return p;
+}
+function makeTex(filter) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+
+if (!gl) {
+  showError('This browser does not support WebGL2, so the paper cannot be shown.');
+} else {
+  try {
+    // the crumple map is a float texture we add into; it needs a float colour buffer
+    if (!gl.getExtension('EXT_color_buffer_float') && !gl.getExtension('EXT_color_buffer_half_float')) {
+      throw new Error('float render targets are not supported');
+    }
+    progBg = program('vFull', 'fBg', [], ['uTex', 'uCrop', 'uMirror', 'uDim'], U.bg);
+    progMap = program('vFull', 'fMap', [], ['uSize', 'uAspect', 'uN', 'uA', 'uB', 'uM', 'uS'], U.map);
+    progSheet = program('vSheet', 'fSheet', ['aP'], ['uMap', 'uImg', 'uAspect', 'uUnit', 'uView', 'uCenter', 'uScale', 'uOffset',
+      'uBall', 'uBallC', 'uBallR', 'uRot', 'uCrop', 'uMirror', 'uLit', 'uTexel', 'uShadow', 'uAlpha'], U.sheet);
+    fullVao = gl.createVertexArray();
+    videoTex = makeTex(gl.LINEAR);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
+    paperTex = makeTex(gl.LINEAR);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
+    gl.useProgram(progSheet);
+    gl.uniform1i(U.sheet.uImg, 0);
+    gl.uniform1i(U.sheet.uMap, 1);
+    gl.useProgram(progBg);
+    gl.uniform1i(U.bg.uTex, 0);
+    ready = true;
+  } catch (e) {
+    showError('Could not set up drawing (' + e.message + ').');
+  }
+}
+
+// ---------- sizes, sheet grid, crumple map ----------
+let viewW = 1, viewH = 1, unit = 1;          // css px; unit = the short side
+let paperAsp = [1, 1], mapW = 1, mapH = 1;   // fixed while a sheet is in use
+let sizeDirty = true;
+
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  viewW = window.innerWidth; viewH = window.innerHeight;
+  cv.width = Math.round(viewW * dpr);
+  cv.height = Math.round(viewH * dpr);
+  sizeDirty = true;
+}
+window.addEventListener('resize', resize);
+resize();
+
+function buildSheet() {
+  // A new sheet takes the current screen shape: grid of about 128 x 280 cells, map 512 texels on the short side.
+  unit = Math.min(viewW, viewH);
+  paperAsp = [viewW / unit, viewH / unit];
+  const long = Math.max(paperAsp[0], paperAsp[1]);
+  const nS = 128, nL = Math.min(300, Math.round(128 * long));
+  const nx = viewW <= viewH ? nS : nL, ny = viewW <= viewH ? nL : nS;
+  const v = new Float32Array((nx + 1) * (ny + 1) * 2);
+  let k = 0;
+  for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) { v[k++] = i / nx; v[k++] = j / ny; }
+  const idx = new Uint16Array(nx * ny * 6);
+  k = 0;
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const a = j * (nx + 1) + i, b = a + 1, c = a + nx + 1, d = c + 1;
+    idx[k++] = a; idx[k++] = c; idx[k++] = b; idx[k++] = b; idx[k++] = c; idx[k++] = d;
+  }
+  if (!sheetVao) {
+    sheetVao = gl.createVertexArray();
+    gl.bindVertexArray(sheetVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 8, 0);
+    sheetIdx = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, sheetIdx);
+  }
+  gl.bindVertexArray(sheetVao);
+  gl.bufferData(gl.ARRAY_BUFFER, v, gl.STATIC_DRAW);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+  gl.bindVertexArray(null);
+  sheetCount = idx.length;
+
+  const s = 512 / Math.min(paperAsp[0], paperAsp[1]);
+  mapW = Math.min(1400, Math.round(paperAsp[0] * s)); mapH = Math.min(1400, Math.round(paperAsp[1] * s));
+  if (!mapTex) { mapTex = makeTex(gl.LINEAR); mapFb = gl.createFramebuffer(); }
+  gl.bindTexture(gl.TEXTURE_2D, mapTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, mapW, mapH, 0, gl.RGBA, gl.HALF_FLOAT, null);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, mapFb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, mapTex, 0);
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    ready = false;
+    showError('Could not set up drawing (the crumple map cannot be drawn on this device).');
+    return;
+  }
+  clearMap();
+  sizeDirty = false;
+}
+function clearMap() {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, mapFb);
+  gl.viewport(0, 0, mapW, mapH);
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+
+// ---------- creases (kept on the CPU too, to find which bit of paper is under the finger) ----------
+let creases = [], squeezes = [], pendC = [], pendS = [];
+const rand = (a, b) => a + Math.random() * (b - a);
+const bump = (x) => { x = Math.max(0, 1 - x * x); return x * x; };
+
+function pullAt(qx, qy) { // same sum as the map shader, ba channels
+  let dx = 0, dy = 0;
+  for (const c of creases) {
+    const nx = -c.ty, ny = c.tx, ex = qx - c.px, ey = qy - c.py;
+    const s = ex * nx + ey * ny, u = ex * c.tx + ey * c.ty;
+    const w = bump(u / c.L) * bump(s / (0.7 * c.L));
+    if (!w) continue;
+    const f = (s < 0 ? -1 : 1) * c.k * Math.min(Math.abs(s), c.m) * w;
+    dx -= nx * f; dy -= ny * f;
+  }
+  for (const q of squeezes) {
+    const ex = qx - q.px, ey = qy - q.py, w = bump(Math.hypot(ex, ey) / q.r);
+    dx -= ex * q.k * w; dy -= ey * q.k * w;
+  }
+  return [dx, dy];
+}
+
+// the sheet is drawn scaled around the screen centre and moved by `offset`
+let scale = 1, offset = [0, 0];
+function toPaper(sx, sy) { // screen css px -> paper point at rest (units)
+  const cx = viewW / 2, cy = viewH / 2;
+  const qx = (cx + (sx - offset[0] - cx) / scale) / unit, qy = (cy + (sy - offset[1] - cy) / scale) / unit;
+  let px = qx, py = qy;
+  for (let i = 0; i < 5; i++) { const d = pullAt(px, py); px = qx - d[0]; py = qy - d[1]; }
+  return [px, py];
+}
+
+let crumple = 0; // 0 = flat .. 1 = a paper ball
+const PER_CREASE = 0.004, PER_SQUEEZE = 0.0015;
+
+function addCrease(q, ang, size) {
+  const c = {
+    px: q[0], py: q[1], tx: Math.cos(ang), ty: Math.sin(ang),
+    A: (Math.random() < 0.5 ? -1 : 1) * rand(0.1, 0.26) * (0.75 + 0.6 * crumple),
+    m: rand(0.008, 0.026) * size, k: rand(0.55, 0.9), L: rand(0.22, 0.55) * size,
+  };
+  creases.push(c); pendC.push(c);
+  crumple += PER_CREASE;
+}
+function addSqueeze(q, k, r) {
+  // keep the paper from turning inside out: measure how squashed it already is here
+  const e = 0.01, a = pullAt(q[0] - e, q[1]), b = pullAt(q[0] + e, q[1]), c = pullAt(q[0], q[1] - e), d = pullAt(q[0], q[1] + e);
+  const room = Math.min(1 + (b[0] - a[0]) / (2 * e), 1 + (d[1] - c[1]) / (2 * e)) - 0.4;
+  k = Math.min(k, Math.max(0, room));
+  if (k <= 0.002) return;
+  const s = { px: q[0], py: q[1], k, r };
+  squeezes.push(s); pendS.push(s);
+  crumple += PER_SQUEEZE;
+}
+function burst(sx, sy) { // a press: a few folds through the finger and a little gathering
+  const q = toPaper(sx, sy);
+  const n = 3 + (Math.random() < 0.5 ? 1 : 0), a0 = Math.random() * Math.PI;
+  for (let i = 0; i < n; i++) {
+    addCrease([q[0] + rand(-0.03, 0.03), q[1] + rand(-0.03, 0.03)], a0 + (i / n) * Math.PI + rand(-0.3, 0.3), rand(0.8, 1.3));
+  }
+  addSqueeze(q, rand(0.04, 0.07), rand(0.18, 0.3));
+}
+function rub(sx, sy, dx, dy) { // a stroke: folds across the way the finger moves
+  const q = toPaper(sx, sy);
+  const ang = Math.atan2(dy, dx) + Math.PI / 2 + rand(-0.7, 0.7);
+  addCrease([q[0] + rand(-0.02, 0.02), q[1] + rand(-0.02, 0.02)], ang, rand(0.6, 1.0));
+  if (Math.random() < 0.3) addSqueeze(q, rand(0.015, 0.03), rand(0.12, 0.2));
+}
+
+function flushMarks() {
+  if (!pendC.length && !pendS.length) return;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, mapFb);
+  gl.viewport(0, 0, mapW, mapH);
+  gl.disable(gl.DEPTH_TEST);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.ONE, gl.ONE);
+  gl.useProgram(progMap);
+  gl.uniform2f(U.map.uSize, mapW, mapH);
+  gl.uniform2f(U.map.uAspect, paperAsp[0], paperAsp[1]);
+  gl.bindVertexArray(fullVao);
+  while (pendC.length || pendS.length) {
+    const cs = pendC.splice(0, 16), ss = pendS.splice(0, 4);
+    const A = new Float32Array(64), B = new Float32Array(64), S = new Float32Array(16);
+    cs.forEach((c, i) => { A.set([c.px, c.py, c.tx, c.ty], i * 4); B.set([c.A, c.m, c.k, c.L], i * 4); });
+    ss.forEach((s, i) => S.set([s.px, s.py, s.k, s.r], i * 4));
+    gl.uniform1i(U.map.uN, cs.length);
+    gl.uniform4fv(U.map.uA, A);
+    gl.uniform4fv(U.map.uB, B);
+    gl.uniform1i(U.map.uM, ss.length);
+    gl.uniform4fv(U.map.uS, S);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  gl.disable(gl.BLEND);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+
+// ---------- camera / test source ----------
+let stream = null, mirror = false, facing = null, testCanvas = null;
+let openSeq = 0; // only the latest camera request may take over
+let started = false;
+
+function stopStream() {
+  if (stream) for (const t of stream.getTracks()) t.stop();
+  stream = null;
+}
+
+function makeTestStream() {
+  // Moving test pattern drawn on a canvas, used instead of a real camera (?test=1)
+  if (!testCanvas) {
+    testCanvas = document.createElement('canvas');
+    testCanvas.width = 640; testCanvas.height = 480;
+    const g = testCanvas.getContext('2d');
+    const t0 = performance.now();
+    const draw = () => {
+      const t = (performance.now() - t0) / 1000;
+      const W = 640, H = 480;
+      const grd = g.createLinearGradient(0, 0, W, H);
+      grd.addColorStop(0, `hsl(${(t * 30) % 360} 70% 55%)`);
+      grd.addColorStop(1, `hsl(${(t * 30 + 160) % 360} 70% 40%)`);
+      g.fillStyle = grd; g.fillRect(0, 0, W, H);
+      // a face-like shape so the shift across the folds is easy to see
+      g.fillStyle = '#e9b48f'; g.beginPath(); g.ellipse(W / 2, H / 2 + 10, 120, 160, 0, 0, Math.PI * 2); g.fill();
+      g.fillStyle = '#3a2418'; g.beginPath(); g.ellipse(W / 2, H / 2 - 110, 140, 80, 0, Math.PI, 0); g.fill();
+      g.fillStyle = '#1d1410';
+      g.beginPath(); g.ellipse(W / 2 - 45, H / 2 - 10, 16, 10, 0, 0, Math.PI * 2); g.fill();
+      g.beginPath(); g.ellipse(W / 2 + 45, H / 2 - 10, 16, 10, 0, 0, Math.PI * 2); g.fill();
+      g.fillStyle = '#c0444a'; g.beginPath(); g.ellipse(W / 2, H / 2 + 85, 40, 14, 0, 0, Math.PI * 2); g.fill();
+      for (let i = 0; i < 24; i++) { // fine stripes, like the detail a real camera picture has
+        g.fillStyle = i % 2 ? 'rgba(0,0,0,.18)' : 'rgba(255,255,255,.22)';
+        g.fillRect(((i * 53 + t * 20) % (W + 20)) - 10, 0, 2 + (i % 5) * 2, H);
+      }
+      g.fillStyle = '#fff'; g.font = 'bold 40px sans-serif'; g.textAlign = 'center';
+      g.fillText('TEST ' + t.toFixed(1), W / 2, 60);
+      requestAnimationFrame(draw);
+    };
+    draw();
+  }
+  return testCanvas.captureStream(30);
+}
+
+function explain(e) {
+  const n = e && e.name;
+  if (n === 'NotAllowedError' || n === 'SecurityError') return 'Camera access was not allowed. Allow the camera for this page in your browser settings, then press the button again.';
+  if (n === 'NotFoundError' || n === 'OverconstrainedError') return 'This camera was not found. Try the other one.';
+  if (n === 'NotReadableError' || n === 'AbortError') return 'Could not open the camera. Check that no other app is using it.';
+  return 'Could not open the camera (' + (n || 'error') + ').';
+}
+
+// Some phones hand back a camera that will not open (a depth or tele camera), or still hold
+// the camera that was just stopped. Try the exact facing first, then each matching camera by id,
+// then a loose request that takes any camera.
+const BACK = /back|rear|environment|背面|外側/i, FRONT = /front|user|face|前面|内側/i;
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+async function findCamera(want, seq) {
+  const stale = { stale: true };
+  const gum = async (constraints) => {
+    if (seq !== openSeq) throw stale; // a newer request took over: do not grab the camera from it
+    const s = await navigator.mediaDevices.getUserMedia({ video: constraints, audio: false });
+    if (seq !== openSeq) { for (const t of s.getTracks()) t.stop(); throw stale; }
+    return s;
+  };
+  const fatal = (e) => e === stale || e.name === 'NotAllowedError' || e.name === 'SecurityError';
+  await wait(150);
+  let firstErr;
+  try { return await gum({ facingMode: { exact: want } }); } catch (e) { if (fatal(e)) throw e; firstErr = e; }
+  const cams = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+  const pick = want === 'environment' ? BACK : FRONT;
+  for (const cam of cams.filter((d) => pick.test(d.label))) {
+    try { return await gum({ deviceId: { exact: cam.deviceId } }); } catch (e) { if (fatal(e)) throw e; }
+  }
+  try { return await gum({ facingMode: want }); } catch (e) { if (fatal(e)) throw e; }
+  throw firstErr;
+}
+
+// Called from the buttons' click handlers.
+function openCamera(want) {
+  if (!ready) return;
+  const seq = ++openSeq;
+  errEl.classList.remove('show');
+  let req;
+  if (TEST) {
+    stopStream();
+    req = Promise.resolve(makeTestStream());
+  } else {
+    if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      showError('The camera only works on HTTPS pages. Open this page again from an https:// address.');
+      return;
+    }
+    stopStream(); // release the old camera first (iOS cannot hold two)
+    video.srcObject = null;
+    req = findCamera(want, seq);
+  }
+  req.then((s) => {
+    if (seq !== openSeq) { if (!TEST) for (const t of s.getTracks()) t.stop(); throw { stale: true }; }
+    stream = s;
+    facing = want;
+    mirror = want === 'user';
+    video.srcObject = s;
+    return video.play();
+  }).then(() => {
+    if (seq !== openSeq) return;
+    startEl.classList.add('hide');
+    topEl.classList.add('show');
+    if (!started) { started = true; showHint('Touch the picture to peel it off the screen'); }
+  }).catch((e) => {
+    if ((e && e.stale) || seq !== openSeq) return; // a newer request is in charge
+    stopStream();
+    showError(explain(e));
+  });
+}
+for (const b of document.querySelectorAll('[data-facing]')) b.addEventListener('click', () => openCamera(b.dataset.facing));
+$('flip').addEventListener('click', () => openCamera(facing === 'user' ? 'environment' : 'user'));
+
+function coverCrop(vw, vh) { // video uv rectangle that fills the screen
+  if (!vw || !vh) return [0, 0, 1, 1];
+  const va = vw / vh, a = viewW / viewH;
+  return va > a ? [(1 - a / va) / 2, 0, a / va, 1] : [0, (1 - va / a) / 2, 1, va / a];
+}
+
+// ---------- messages ----------
+let hintTimer = 0, toastTimer = 0;
+function showHint(text, ms = 4000) {
+  hint.textContent = text; hint.style.opacity = 1;
+  clearTimeout(hintTimer); hintTimer = setTimeout(() => { hint.style.opacity = 0; }, ms);
+}
+function toast(text) {
+  toastEl.textContent = text; toastEl.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1400);
+}
+
+// ---------- the sheet's life ----------
+// live: the picture is still on the monitor. peeled: a still sheet you can crumple.
+// fly: kept, leaving the screen. ball: crumpled up, being thrown away.
+let phase = 'live';
+let lift = 0, grabLift = 0, fade = 1;
+let paperCrop = [0, 0, 1, 1], paperMirror = false;
+let grab = null, flyV = [0, 0];
+let ball = null; // { t, cx, cy, vy }
+let lastTouch = [0, 0];
+let peeledHinted = false;
+
+function peel() {
+  if (video.readyState >= 2 && video.videoWidth) {
+    gl.bindTexture(gl.TEXTURE_2D, paperTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+    paperCrop = coverCrop(video.videoWidth, video.videoHeight);
+  }
+  paperMirror = mirror;
+  phase = 'peeled';
+  meter.classList.add('show');
+  if (!peeledHinted) { peeledHinted = true; showHint('Rub to crumple · hold still, then swipe it off to keep', 5000); }
+}
+
+function newSheet() {
+  if (sizeDirty) buildSheet(); else clearMap();
+  creases = []; squeezes = []; pendC = []; pendS = [];
+  crumple = 0; phase = 'live'; lift = 0; grabLift = 0; scale = 1; offset = [0, 0];
+  grab = null; ball = null; fade = 0;
+  touches.clear();
+  meter.classList.remove('show');
+}
+
+function startBall() {
+  phase = 'ball';
+  grab = null; touches.clear();
+  const cx = viewW / 2, cy = viewH / 2; // the ball forms where the finger was, in sheet space
+  const bx = cx + (lastTouch[0] - offset[0] - cx) / scale, by = cy + (lastTouch[1] - offset[1] - cy) / scale;
+  ball = { t: 0, cx: Math.min(viewW * 0.8, Math.max(viewW * 0.2, bx)), cy: Math.min(viewH * 0.75, Math.max(viewH * 0.25, by)), vy: 0 };
+  meter.classList.remove('show');
+}
+
+// ---------- touch / mouse ----------
+const touches = new Map(); // pointerId -> { x, y, dist, ax, ay, held }
+const STEP = 24;           // css px of rubbing per fold
+const HOLD_MS = 450;
+
+cv.addEventListener('contextmenu', (e) => e.preventDefault());
+cv.addEventListener('pointerdown', (e) => {
+  if (!started || !ready) return;
+  e.preventDefault();
+  if (phase === 'fly' || phase === 'ball' || grab) return;
+  try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+  const now = performance.now();
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY, dist: 0, ax: e.clientX, ay: e.clientY, held: 0 });
+  lastTouch = [e.clientX, e.clientY];
+  if (phase === 'live') peel();
+  burst(e.clientX, e.clientY);
+});
+cv.addEventListener('pointermove', (e) => {
+  const p = touches.get(e.pointerId);
+  if (!p) return;
+  e.preventDefault();
+  const now = performance.now();
+  const dx = e.clientX - p.x, dy = e.clientY - p.y;
+  p.x = e.clientX; p.y = e.clientY;
+  if (grab && grab.id === e.pointerId) {
+    const dt = Math.max((now - grab.t) / 1000, 1 / 240);
+    offset[0] += dx; offset[1] += dy;
+    grab.vx = grab.vx * 0.4 + (dx / dt) * 0.6; grab.vy = grab.vy * 0.4 + (dy / dt) * 0.6;
+    grab.t = now;
+    return;
+  }
+  if (phase !== 'peeled') return;
+  lastTouch = [e.clientX, e.clientY];
+  if (Math.hypot(e.clientX - p.ax, e.clientY - p.ay) > 10) { p.ax = e.clientX; p.ay = e.clientY; p.held = 0; }
+  p.dist += Math.hypot(dx, dy);
+  while (p.dist >= STEP) { p.dist -= STEP; rub(e.clientX, e.clientY, dx, dy); }
+});
+function release(e) {
+  if (!touches.has(e.pointerId)) return;
+  touches.delete(e.pointerId);
+  if (!grab || grab.id !== e.pointerId) return;
+  const g = grab; grab = null;
+  const sp = Math.hypot(g.vx, g.vy), om = Math.hypot(offset[0], offset[1]);
+  const fling = sp > 900 && (g.vx * offset[0] + g.vy * offset[1]) > 0;
+  const far = Math.abs(offset[0]) > viewW * 0.28 || Math.abs(offset[1]) > viewH * 0.22;
+  if (phase === 'peeled' && (far || fling) && om > 20) {
+    keepPhoto();
+    const dir = sp > 300 ? [g.vx / sp, g.vy / sp] : [offset[0] / om, offset[1] / om];
+    const v = Math.max(sp, 2400);
+    flyV = [dir[0] * v, dir[1] * v];
+    phase = 'fly';
+    meter.classList.remove('show');
+  }
+}
+cv.addEventListener('pointerup', release);
+cv.addEventListener('pointercancel', release);
+
+function startGrab(id) {
+  grab = { id, vx: 0, vy: 0, t: performance.now() };
+  if (navigator.vibrate) { try { navigator.vibrate(12); } catch (_) {} }
+  showHint('Swipe it off the screen to keep it', 3000);
+}
+
+// ---------- photo folder ----------
+const photos = []; // { blob, url }
+function keepPhoto() {
+  // draw the sheet as it is now, without the lift, into an off-screen buffer and read it back
+  const w = cv.width, h = cv.height;
+  if (!capFb || capW !== w || capH !== h) {
+    if (!capFb) { capFb = gl.createFramebuffer(); capColor = gl.createRenderbuffer(); capDepth = gl.createRenderbuffer(); }
+    gl.bindRenderbuffer(gl.RENDERBUFFER, capColor);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.RGBA8, w, h);
+    gl.bindRenderbuffer(gl.RENDERBUFFER, capDepth);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, w, h);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, capFb);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, capColor);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, capDepth);
+    capW = w; capH = h;
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, capFb);
+  gl.viewport(0, 0, w, h);
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  drawSheet({ scale: 1, offset: [0, 0], lit: 1, ballE: 0, shadow: false, alpha: 1 });
+  const px = new Uint8Array(w * h * 4);
+  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if (px[(y * w + x) * 4 + 3] > 8) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  }
+  if (x1 < 0) return;
+  const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+  const crop = document.createElement('canvas');
+  crop.width = bw; crop.height = bh;
+  const cg = crop.getContext('2d'), img = cg.createImageData(bw, bh);
+  for (let y = 0; y < bh; y++) { // GL rows run bottom-up
+    const src = ((y0 + bh - 1 - y) * w + x0) * 4;
+    img.data.set(px.subarray(src, src + bw * 4), y * bw * 4);
+  }
+  // un-premultiply is not needed: the sheet is drawn opaque
+  cg.putImageData(img, 0, 0);
+  // place it on white, like a scan of the crumpled paper
+  const fit = Math.min(1, 1200 / Math.max(bw, bh)), margin = Math.round(Math.max(bw, bh) * fit * 0.07);
+  const out = document.createElement('canvas');
+  out.width = Math.round(bw * fit) + margin * 2; out.height = Math.round(bh * fit) + margin * 2;
+  const og = out.getContext('2d');
+  og.fillStyle = '#f7f6f3'; og.fillRect(0, 0, out.width, out.height);
+  og.shadowColor = 'rgba(0,0,0,.28)'; og.shadowBlur = margin * 0.35; og.shadowOffsetY = margin * 0.08;
+  og.drawImage(crop, margin, margin, bw * fit, bh * fit);
+  out.toBlob((blob) => {
+    if (!blob) return;
+    photos.unshift({ blob, url: URL.createObjectURL(blob) });
+    renderGrid();
+    photosBtn.classList.remove('pulse'); void photosBtn.offsetWidth; photosBtn.classList.add('pulse');
+  }, 'image/jpeg', 0.9);
+}
+
+const drawer = $('drawer'), grid = $('grid'), viewer = $('viewer'), viewImg = $('viewImg');
+let viewing = null;
+function renderGrid() {
+  photosBtn.textContent = 'Photos ' + photos.length;
+  $('empty').style.display = photos.length ? 'none' : '';
+  grid.textContent = '';
+  photos.forEach((p, i) => {
+    const b = document.createElement('button');
+    const im = document.createElement('img');
+    im.src = p.url; im.alt = 'Photo ' + (photos.length - i);
+    b.appendChild(im);
+    b.addEventListener('click', () => { viewing = p; viewImg.src = p.url; viewer.classList.add('show'); });
+    grid.appendChild(b);
+  });
+}
+photosBtn.addEventListener('click', () => { drawer.classList.add('open'); drawer.setAttribute('aria-hidden', 'false'); });
+$('closeDrawer').addEventListener('click', () => { drawer.classList.remove('open'); drawer.setAttribute('aria-hidden', 'true'); });
+$('closeViewer').addEventListener('click', () => { viewer.classList.remove('show'); viewing = null; });
+$('saveBtn').addEventListener('click', async () => {
+  if (!viewing) return;
+  const name = 'crumple-' + new Date().toISOString().replace(/[:.]/g, '-') + '.jpg';
+  const file = new File([viewing.blob], name, { type: 'image/jpeg' });
+  // phones: the share sheet has "Save Image"; elsewhere: a normal download
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file] }); } catch (_) {}
+    return;
+  }
+  const a = document.createElement('a');
+  a.href = viewing.url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+});
+renderGrid();
+
+// ---------- drawing ----------
+function drawSheet(o) {
+  const live = phase === 'live';
+  gl.useProgram(progSheet);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mapTex);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, live ? videoTex : paperTex);
+  const crop = live ? coverCrop(video.videoWidth, video.videoHeight) : paperCrop;
+  gl.uniform4f(U.sheet.uCrop, crop[0], crop[1], crop[2], crop[3]);
+  gl.uniform1f(U.sheet.uMirror, (live ? mirror : paperMirror) ? 1 : 0);
+  gl.uniform2f(U.sheet.uAspect, paperAsp[0], paperAsp[1]);
+  gl.uniform1f(U.sheet.uUnit, unit);
+  gl.uniform2f(U.sheet.uView, viewW, viewH);
+  gl.uniform2f(U.sheet.uCenter, viewW / 2, viewH / 2);
+  gl.uniform2f(U.sheet.uTexel, 1 / mapW, 1 / mapH);
+  gl.uniform1f(U.sheet.uBall, o.ballE);
+  gl.uniform2f(U.sheet.uBallC, ball ? ball.cx : 0, ball ? ball.cy : 0);
+  gl.uniform1f(U.sheet.uBallR, unit * 0.2);
+  gl.uniform1f(U.sheet.uRot, ball ? ball.t * 2.5 : 0);
+  gl.uniform1f(U.sheet.uScale, o.scale);
+  gl.uniform1f(U.sheet.uLit, o.lit);
+  gl.bindVertexArray(sheetVao);
+  if (o.shadow) { // soft shadow: a few faint copies, offset down and to the right
+    gl.disable(gl.DEPTH_TEST);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    const sx = (4 + 4 * grabLift) * lift, sy = (10 + 12 * grabLift) * lift, r = (3 + 6 * grabLift) * lift + 2;
+    const taps = [[0, 0], [r, 0], [-r, 0], [0, r], [0, -r]];
+    gl.uniform1f(U.sheet.uShadow, 0.13 * lift * o.alpha);
+    for (const t of taps) {
+      gl.uniform2f(U.sheet.uOffset, o.offset[0] + sx + t[0], o.offset[1] + sy + t[1]);
+      gl.drawElements(gl.TRIANGLES, sheetCount, gl.UNSIGNED_SHORT, 0);
+    }
+    gl.disable(gl.BLEND);
+  }
+  gl.uniform1f(U.sheet.uShadow, 0);
+  gl.uniform1f(U.sheet.uAlpha, o.alpha);
+  gl.uniform2f(U.sheet.uOffset, o.offset[0], o.offset[1]);
+  gl.enable(gl.DEPTH_TEST);
+  gl.depthFunc(gl.LEQUAL);
+  gl.clear(gl.DEPTH_BUFFER_BIT);
+  if (o.alpha < 1) { gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); }
+  gl.drawElements(gl.TRIANGLES, sheetCount, gl.UNSIGNED_SHORT, 0);
+  gl.disable(gl.BLEND);
+  gl.disable(gl.DEPTH_TEST);
+  gl.bindVertexArray(null);
+}
+
+const ease = (x) => x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
+let lastT = performance.now();
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.05, (now - lastT) / 1000);
+  lastT = now;
+  if (!ready || !started) return;
+  if (sizeDirty && phase === 'live') buildSheet();
+  if (!ready) return;
+
+  if (video.readyState >= 2 && video.videoWidth) {
+    gl.bindTexture(gl.TEXTURE_2D, videoTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+  }
+
+  // long press: one finger kept still
+  if (phase === 'peeled' && !grab && touches.size === 1) {
+    // add up still time frame by frame (at most 50 ms each), so a slow frame never counts as a long press
+    const [id, p] = [...touches.entries()][0];
+    p.held += dt * 1000;
+    if (p.held > HOLD_MS) startGrab(id);
+  }
+  if (phase === 'peeled' && crumple >= 1) startBall();
+  flushMarks();
+
+  const k = 1 - Math.exp(-dt * 10);
+  lift += ((phase === 'live' ? 0 : 1) - lift) * k;
+  grabLift += ((grab ? 1 : 0) - grabLift) * k;
+  fade = Math.min(1, fade + dt * 4);
+  let ballE = 0;
+  if (phase === 'peeled' && !grab) { offset[0] *= 1 - k; offset[1] *= 1 - k; }
+  if (phase === 'fly') {
+    offset[0] += flyV[0] * dt; offset[1] += flyV[1] * dt;
+    if (Math.abs(offset[0]) > viewW * 1.3 || Math.abs(offset[1]) > viewH * 1.3) { newSheet(); toast('Kept in Photos'); }
+  }
+  if (phase === 'ball') {
+    ball.t += dt;
+    ballE = ease(Math.min(1, ball.t / 0.8));
+    if (ball.t > 1.15) { // thrown away: drop off the bottom
+      ball.vy += 3200 * dt;
+      offset[1] += ball.vy * dt;
+      if (offset[1] > viewH) { newSheet(); toast('Thrown away'); }
+    }
+  }
+  scale = phase === 'live' ? 1 : 1 - 0.07 * lift + 0.035 * grabLift;
+  meter.firstElementChild.style.width = Math.min(100, crumple * 100).toFixed(1) + '%';
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, cv.width, cv.height);
+  // the monitor behind: the live camera, dimmed while a sheet is off it
+  gl.useProgram(progBg);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, videoTex);
+  const crop = coverCrop(video.videoWidth, video.videoHeight);
+  gl.uniform4f(U.bg.uCrop, crop[0], crop[1], crop[2], crop[3]);
+  gl.uniform1f(U.bg.uMirror, mirror ? 1 : 0);
+  gl.uniform1f(U.bg.uDim, phase === 'live' ? 0.3 + 0.7 * fade : 1 - 0.7 * lift);
+  gl.bindVertexArray(fullVao);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.bindVertexArray(null);
+
+  drawSheet({ scale, offset, lit: Math.min(1, lift * 1.5), ballE, shadow: phase !== 'live', alpha: fade });
+}
+requestAnimationFrame(frame);
+
+// read-only state for the automatic checks
+window.__crumple = () => ({ phase, crumple, creases: creases.length, photos: photos.length, grab: !!grab });
+</script>
+</body>
+</html>
