@@ -17,7 +17,8 @@ html, body {
   letter-spacing: .02em;
 }
 #stage { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-#cam { position: fixed; left: 0; top: 0; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
+/* not opacity 0: iOS may stop drawing a fully hidden video, and the picture taken from it turns black */
+#cam { position: fixed; left: 0; top: 0; width: 2px; height: 2px; opacity: .01; pointer-events: none; }
 /* every control is plain small text; no fills, no rounded pills */
 button {
   font: inherit; color: inherit; background: none; border: 0; border-radius: 0; padding: 0 2px; min-height: 44px;
@@ -703,8 +704,10 @@ async function showStream(s, seq) {
 
 // Opened by itself on load (front), then by the round-arrows button and Try again.
 let wanted = 'user';
-function openCamera(want) {
+function openCamera(want, again = false) {
   if (!ready) return;
+  if (!again) blackRetries = 0; // a button press (or the first open) starts the count afresh
+  camOpenedAt = -1e9; // no black check while opening
   wanted = want;
   $('flipBtn').classList.toggle('back', want === 'environment');
   const seq = ++openSeq;
@@ -732,6 +735,7 @@ function openCamera(want) {
   }).then(() => {
     if (seq !== openSeq) return;
     document.body.classList.add('started');
+    camOpenedAt = performance.now(); blackSince = 0;
     if (!started) { started = true; showHint('Touch to peel'); }
   }).catch((e) => {
     if ((e && e.stale) || seq !== openSeq) return; // a newer request is in charge
@@ -742,6 +746,27 @@ function openCamera(want) {
 $('flipBtn').addEventListener('click', () => openCamera(wanted === 'user' ? 'environment' : 'user'));
 $('retryBtn').addEventListener('click', () => openCamera(wanted));
 $('facetsBtn').addEventListener('click', () => { facets = !facets; $('facetsBtn').classList.toggle('on', facets); $('facetsBtn').textContent = facets ? 'Facets' : 'Smooth'; });
+
+// Sometimes a front camera opens and sends only black frames. For the first few seconds after a
+// camera starts, a tiny copy of the picture is checked; if it stays pure black for 1.5 s the camera
+// is opened again (twice at most). Once a real picture is seen, the check stops, so a lens covered
+// by a hand later on is left alone.
+let camOpenedAt = -1e9, blackSince = 0, blackRetries = 0, lastProbe = 0, probeCtx = null;
+function watchForBlack(now) {
+  if (TEST || phase !== 'live' || now - camOpenedAt > 6000 || now - lastProbe < 300) return;
+  lastProbe = now;
+  if (!probeCtx) { const c = document.createElement('canvas'); c.width = c.height = 16; probeCtx = c.getContext('2d', { willReadFrequently: true }); }
+  probeCtx.drawImage(video, 0, 0, 16, 16);
+  const px = probeCtx.getImageData(0, 0, 16, 16).data;
+  let max = 0;
+  for (let i = 0; i < px.length; i += 4) max = Math.max(max, px[i], px[i + 1], px[i + 2]);
+  if (max > 6) { camOpenedAt = -1e9; return; } // a real picture: stop checking
+  if (!blackSince) { blackSince = now; return; }
+  if (now - blackSince < 1500) return;
+  camOpenedAt = -1e9;
+  if (blackRetries < 2) { blackRetries++; openCamera(wanted, true); }
+  else showHint('Picture stays black — tap the arrows to switch', 6000);
+}
 
 function coverCrop(vw, vh) { // video uv rectangle that fills the screen
   if (!vw || !vh) return [0, 0, 1, 1];
@@ -1079,6 +1104,7 @@ function frame(now) {
   if (video.readyState >= 2 && video.videoWidth) {
     gl.bindTexture(gl.TEXTURE_2D, videoTex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+    watchForBlack(now);
   }
 
   // long press: one finger kept still. Still time is added frame by frame (at most 50 ms each),
@@ -1140,7 +1166,7 @@ openCamera('user'); // straight to the front camera; the round arrows switch to 
 window.__crumple = () => {
   let m = 0; // mean distance a point moved in the last step (css px)
   if (P) for (let k = 0; k < N * 3; k += 3) m += Math.hypot(P[k] - Q[k], P[k + 1] - Q[k + 1], P[k + 2] - Q[k + 2]);
-  return { phase, photos: photos.length, grab: !!hold, moving: +(m / N).toFixed(3) };
+  return { phase, photos: photos.length, grab: !!hold, moving: +(m / N).toFixed(3), blackRetries };
 };
 </script>
 </body>
