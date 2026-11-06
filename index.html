@@ -44,12 +44,6 @@ button {
 #top button { pointer-events: auto; background: var(--bar); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
 #photosBtn.pulse { animation: pulse .6s ease; }
 @keyframes pulse { 0% { transform: scale(1); } 40% { transform: scale(1.18); background: var(--hot); } 100% { transform: scale(1); } }
-#meter {
-  position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 34px); width: 96px; margin-left: -48px; height: 4px;
-  border-radius: 2px; background: rgba(255,255,255,.18); opacity: 0; transition: opacity .3s; pointer-events: none;
-}
-#meter.show { opacity: 1; }
-#meter i { display: block; height: 100%; width: 0; border-radius: 2px; background: var(--ink); }
 #hint {
   position: fixed; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom, 0px) + 20px);
   text-align: center; pointer-events: none; transition: opacity .5s; color: var(--ink); opacity: 0;
@@ -93,7 +87,7 @@ button {
 
 <div id="start">
   <h1>Crumple Camera</h1>
-  <p>Pick a camera. Touch the picture and it peels off the screen like a sheet of paper. Push, drag and pinch it to crumple it. Hold still, then swipe it off the screen to keep it as a photo. Crumple it all the way and it turns into a paper ball and is thrown away. The video never leaves this device.</p>
+  <p>Pick a camera. Touch the picture and it peels off the screen like a sheet of paper. Push, drag and pinch it to crumple it. Hold still to pick it up, then swipe down to keep it as a photo, or up to crumple it into a ball and throw it away. The video never leaves this device.</p>
   <button data-facing="user">Front camera</button>
   <button data-facing="environment">Back camera</button>
   <div id="err"></div>
@@ -103,7 +97,6 @@ button {
   <button id="flip">Switch camera</button>
   <button id="photosBtn">Photos 0</button>
 </div>
-<div id="meter"><i></i></div>
 <div id="hint"></div>
 <div id="toast"></div>
 
@@ -111,7 +104,7 @@ button {
   <header><h2>Photos</h2><button id="closeDrawer">Close</button></header>
   <p class="note">Kept only while this page is open. Open a photo to save it to your device.</p>
   <div id="grid"></div>
-  <p id="empty">No photos yet. Hold the sheet still, then swipe it off the screen.</p>
+  <p id="empty">No photos yet. Hold the sheet still to pick it up, then swipe down.</p>
 </div>
 
 <div id="viewer">
@@ -195,7 +188,7 @@ const TEST = params.has('test');
 
 const $ = (id) => document.getElementById(id);
 const cv = $('stage'), video = $('cam'), startEl = $('start'), errEl = $('err'), topEl = $('top');
-const hint = $('hint'), meter = $('meter'), toastEl = $('toast'), photosBtn = $('photosBtn');
+const hint = $('hint'), toastEl = $('toast'), photosBtn = $('photosBtn');
 
 function showError(text) {
   startEl.classList.remove('hide');
@@ -292,7 +285,6 @@ let P, Q, R0;                      // positions, previous positions, rest positi
 // drawn copy: smoothed and split twice as fine, so the picture bends along smooth curves
 let RX = 2, RY = 2, SM, RP;
 let cA, cB, cRest, cK, cPlastic, nC = 0;
-let restArea = 1;
 const ITER = 8;
 
 function buildSheet() {
@@ -339,16 +331,11 @@ function buildSheet() {
   gl.bufferData(gl.ARRAY_BUFFER, UVS, gl.STATIC_DRAW);
   gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
   gl.bindVertexArray(null);
-  restArea = viewW * viewH;
   sizeDirty = false;
   flatten();
 }
 
-let pushed = 0;             // css px the fingers have pushed the paper
-const PUSH_MAX = 5000;      // this much pushing is a paper ball (unless the sheet shrinks enough first)
-
 function flatten() {
-  pushed = 0;
   P.set(R0); Q.set(R0);
   // a faint, smooth unevenness at the start, so the first push buckles into soft waves instead of sliding flat
   const f1 = Math.random() * 6, f2 = Math.random() * 6;
@@ -365,7 +352,7 @@ function flatten() {
 // grabs: the paper under each finger follows it, strongest in the middle
 const grabs = new Map(); // pointerId -> { ids, w, ox, oy, x, y }
 function grabAt(id, sx, sy) {
-  const r = unit * 0.1, r2 = r * r;
+  const r = unit * 0.16, r2 = r * r;
   const ids = [], w = [], ox = [], oy = [];
   for (let k = 0; k < N; k++) {
     const dx = P[k * 3] - sx, dy = P[k * 3 + 1] - sy, d2 = dx * dx + dy * dy;
@@ -387,8 +374,10 @@ function pullGrabs(strength) {
 let ballMode = null; // { cx, cy, r } while the paper is being balled up
 function simulate(dt) {
   const g = 1.5 * dt;                             // bulges settle back toward the monitor
+  // with no finger on it the paper comes to rest quickly instead of drifting on
+  const keep = grabs.size || ballMode ? 0.96 : 0.6;
   for (let k = 0; k < N * 3; k += 3) {
-    const vx = (P[k] - Q[k]) * 0.96, vy = (P[k + 1] - Q[k + 1]) * 0.96, vz = (P[k + 2] - Q[k + 2]) * 0.96;
+    const vx = (P[k] - Q[k]) * keep, vy = (P[k + 1] - Q[k + 1]) * keep, vz = (P[k + 2] - Q[k + 2]) * keep;
     Q[k] = P[k]; Q[k + 1] = P[k + 1]; Q[k + 2] = P[k + 2];
     P[k] += vx; P[k + 1] += vy; P[k + 2] += vz - (ballMode ? 0 : P[k + 2] * g);
   }
@@ -417,15 +406,16 @@ function simulate(dt) {
         // paper lying flat on the monitor sticks a little (friction); paper that has bulged up or down slides.
         // The monitor is not a hard floor: a bulge may go either way, and both read as a wrinkle.
         if (Math.abs(P[k + 2]) < contact) {
-          P[k] = Q[k] + (P[k] - Q[k]) * 0.2; P[k + 1] = Q[k + 1] + (P[k + 1] - Q[k + 1]) * 0.2;
+          P[k] = Q[k] + (P[k] - Q[k]) * 0.4; P[k + 1] = Q[k + 1] + (P[k + 1] - Q[k + 1]) * 0.4;
         }
       }
     }
   }
   collide();
-  // plastic folding: lengths that were bent far enough keep part of the bend
-  const creep = ballMode ? 0.2 : 0.08;
-  for (let c = 0; c < nC; c++) {
+  // plastic folding: lengths that were bent far enough keep part of the bend.
+  // Only while a finger is on the paper (or it is being balled up): left alone, the shape stays as it is.
+  const creep = ballMode ? 0.2 : grabs.size ? 0.15 : 0;
+  for (let c = 0; creep && c < nC; c++) {
     if (!cPlastic[c]) continue;
     const a = cA[c] * 3, b = cB[c] * 3;
     const d = Math.hypot(P[b] - P[a], P[b + 1] - P[a + 1], P[b + 2] - P[a + 2]);
@@ -489,16 +479,6 @@ function updateRender() {
     const dst = ((2 * j + 1) * RX + i) * 3, a = row(j - 1), b = row(j), c = row(j + 1), d = row(j + 2);
     for (let q = 0; q < 3; q++) RP[dst + q] = mid(RP[a + q], RP[b + q], RP[c + q], RP[d + q]);
   }
-}
-
-function coveredArea() { // area the paper still covers on the monitor (seen from the front)
-  let s = 0;
-  for (let j = 0; j < NY - 1; j++) for (let i = 0; i < NX - 1; i++) {
-    const a = (j * NX + i) * 3, b = a + 3, c = a + NX * 3, d = c + 3;
-    s += Math.abs((P[b] - P[a]) * (P[c + 1] - P[a + 1]) - (P[b + 1] - P[a + 1]) * (P[c] - P[a])) * 0.5;
-    s += Math.abs((P[b] - P[d]) * (P[c + 1] - P[d + 1]) - (P[b + 1] - P[d + 1]) * (P[c] - P[d])) * 0.5;
-  }
-  return s;
 }
 
 // ---------- camera / test source ----------
@@ -637,13 +617,12 @@ function toast(text) {
 
 // ---------- the sheet's life ----------
 // live: the picture is still on the monitor. peeled: a still sheet you can crumple.
-// fly: kept, leaving the screen. ball: crumpled up, being thrown away.
+// fly: kept, leaving the screen. ball: picked up and swiped up, crumpled into a ball and thrown away.
 let phase = 'live';
 let lift = 0, holdLift = 0, fade = 1;
 let paperCrop = [0, 0, 1, 1], paperMirror = false;
 let hold = null, flyV = [0, 0];   // hold = the whole sheet carried by one finger after a long press
 let ball = null;                  // { t, vy }
-let crumple = 0;                  // 0 = flat .. 1 = a paper ball
 let peeledHinted = false;
 let scale = 1, offset = [0, 0];   // the sheet is drawn scaled around the screen centre and moved by offset
 
@@ -655,16 +634,14 @@ function peel() {
   }
   paperMirror = mirror;
   phase = 'peeled';
-  meter.classList.add('show');
-  if (!peeledHinted) { peeledHinted = true; showHint('Push and pinch to crumple · hold still, then swipe it off to keep', 5000); }
+  if (!peeledHinted) { peeledHinted = true; showHint('Push and pinch to crumple · hold still to pick it up', 5000); }
 }
 
 function newSheet() {
   if (sizeDirty) buildSheet(); else flatten();
-  crumple = 0; phase = 'live'; lift = 0; holdLift = 0; scale = 1; offset = [0, 0];
+  phase = 'live'; lift = 0; holdLift = 0; scale = 1; offset = [0, 0];
   hold = null; ball = null; ballMode = null; fade = 0;
   touches.clear(); grabs.clear();
-  meter.classList.remove('show');
 }
 
 function startBall() {
@@ -674,7 +651,6 @@ function startBall() {
   for (let k = 0; k < N * 3; k += 3) { cx += P[k]; cy += P[k + 1]; }
   ballMode = { cx: cx / N, cy: cy / N, r: unit * 0.17 };
   ball = { t: 0, vy: 0 };
-  meter.classList.remove('show');
 }
 
 // ---------- touch / mouse ----------
@@ -709,12 +685,10 @@ cv.addEventListener('pointermove', (e) => {
   if (Math.hypot(e.clientX - p.ax, e.clientY - p.ay) > 6) { p.ax = e.clientX; p.ay = e.clientY; p.held = 0; }
   const g = grabs.get(e.pointerId);
   if (!g) return;
-  // paper held down on the monitor does not slide along with the finger: the spot under it moves only part of the way,
-  // the rest of the push goes into wrinkles
+  // the spot under the finger follows it a little more than all the way, so small moves already twist and bunch the paper
   const [x, y] = toSheet(e.clientX, e.clientY), dx = x - (g.fx ?? x), dy = y - (g.fy ?? y);
   g.fx = x; g.fy = y;
-  g.x += dx * 0.4; g.y += dy * 0.4;
-  pushed += Math.hypot(dx, dy);
+  g.x += dx * 1.15; g.y += dy * 1.15;
 });
 function release(e) {
   if (!touches.has(e.pointerId)) return;
@@ -722,16 +696,17 @@ function release(e) {
   grabs.delete(e.pointerId);
   if (!hold || hold.id !== e.pointerId) return;
   const h = hold; hold = null;
-  const sp = Math.hypot(h.vx, h.vy), om = Math.hypot(offset[0], offset[1]);
-  const fling = sp > 900 && (h.vx * offset[0] + h.vy * offset[1]) > 0;
-  const far = Math.abs(offset[0]) > viewW * 0.28 || Math.abs(offset[1]) > viewH * 0.22;
-  if (phase === 'peeled' && (far || fling) && om > 20) {
+  if (phase !== 'peeled') return;
+  // carried down (or flicked down): keep it as a photo. Carried up (or flicked up): crumple and throw away.
+  // Anything else: it settles back.
+  const down = offset[1] > viewH * 0.18 || (h.vy > 900 && offset[1] > 10);
+  const up = offset[1] < -viewH * 0.18 || (h.vy < -900 && offset[1] < -10);
+  if (down) {
     keepPhoto();
-    const dir = sp > 300 ? [h.vx / sp, h.vy / sp] : [offset[0] / om, offset[1] / om];
-    const v = Math.max(sp, 2400);
-    flyV = [dir[0] * v, dir[1] * v];
+    flyV = [h.vx * 0.3, Math.max(h.vy, 2400)];
     phase = 'fly';
-    meter.classList.remove('show');
+  } else if (up) {
+    startBall();
   }
 }
 cv.addEventListener('pointerup', release);
@@ -742,7 +717,7 @@ function startHold(id) {
   grabs.delete(id); // the finger now carries the whole sheet instead of pulling one spot
   hold = { id, x: p.ax, y: p.ay, vx: 0, vy: 0, t: performance.now() };
   if (navigator.vibrate) { try { navigator.vibrate(12); } catch (_) {} }
-  showHint('Swipe it off the screen to keep it', 3000);
+  showHint('Swipe down to keep · swipe up to throw away', 3000);
 }
 
 // ---------- photo folder ----------
@@ -874,7 +849,7 @@ function drawSheet(o) {
   gl.bindVertexArray(null);
 }
 
-let lastT = performance.now(), simDebt = 0, areaTick = 0;
+let lastT = performance.now(), simDebt = 0, restT = 0;
 const SIM_DT = 1 / 60;
 function frame(now) {
   requestAnimationFrame(frame);
@@ -896,15 +871,13 @@ function frame(now) {
     if (p.held > HOLD_MS) startHold(id);
   }
 
-  if (phase === 'peeled' || phase === 'ball') {
+  // the paper sleeps a moment after the last finger leaves: the solver's small leftover jitter would
+  // otherwise keep reshaping it with nobody touching it
+  restT = phase === 'peeled' && !grabs.size ? restT + dt : 0;
+  if (phase === 'ball' || (phase === 'peeled' && restT < 0.8)) {
     simDebt = Math.min(simDebt + dt, SIM_DT); // at most one step a frame: a slow phone slows the paper down instead of falling behind
     while (simDebt >= SIM_DT) { simulate(SIM_DT); simDebt -= SIM_DT; }
-  }
-  if (phase === 'peeled') {
-    // how crumpled: the larger of how much the sheet has shrunk on the monitor and how much it has been pushed
-    if (++areaTick % 4 === 0) crumple = Math.max(crumple, Math.min(1, Math.max((1 - coveredArea() / restArea) / 0.38, pushed / PUSH_MAX)));
-    if (crumple >= 1) startBall();
-  }
+  } else if (phase === 'peeled') Q.set(P);
 
   const k = 1 - Math.exp(-dt * 10);
   lift += ((phase === 'live' ? 0 : 1) - lift) * k;
@@ -917,14 +890,13 @@ function frame(now) {
   }
   if (phase === 'ball') {
     ball.t += dt;
-    if (ball.t > 1.3) { // thrown away: drop off the bottom
-      ball.vy += 3200 * dt;
+    if (ball.t > 0.9) { // thrown away: tossed off the top
+      ball.vy -= 3200 * dt;
       offset[1] += ball.vy * dt;
-      if (offset[1] > viewH) { newSheet(); toast('Thrown away'); }
+      if (offset[1] < -viewH) { newSheet(); toast('Thrown away'); }
     }
   }
   scale = phase === 'live' ? 1 : 1 - 0.07 * lift + 0.035 * holdLift;
-  meter.firstElementChild.style.width = (crumple * 100).toFixed(1) + '%';
 
   updateRender();
   gl.bindBuffer(gl.ARRAY_BUFFER, posBuf); gl.bufferData(gl.ARRAY_BUFFER, RP, gl.DYNAMIC_DRAW);
@@ -947,7 +919,11 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // read-only state for the automatic checks
-window.__crumple = () => ({ phase, crumple, photos: photos.length, grab: !!hold });
+window.__crumple = () => {
+  let m = 0; // mean distance a point moved in the last step (css px)
+  if (P) for (let k = 0; k < N * 3; k += 3) m += Math.hypot(P[k] - Q[k], P[k + 1] - Q[k + 1], P[k + 2] - Q[k + 2]);
+  return { phase, photos: photos.length, grab: !!hold, moving: +(m / N).toFixed(3) };
+};
 </script>
 </body>
 </html>
