@@ -230,8 +230,9 @@ void main() {
     float key = max(dot(N, K), 0.0), fill = max(dot(N, F), 0.0), sky = 0.5 + 0.5 * N.z;
     float light = (0.62 * key + 0.18 * fill + 0.3 * sky) / (0.62 * K.z + 0.18 * F.z + 0.3);
     vec3 H = normalize(K + vec3(0.0, 0.0, 1.0));
-    float sheen = max(pow(max(dot(N, H), 0.0), 12.0) - pow(H.z, 12.0), 0.0) * 0.03;  // matte paper, a faint gloss
-    c = c * mix(1.0, clamp(light, 0.55, 1.2), 0.5) + sheen;   // half strength
+    float sheen = max(pow(max(dot(N, H), 0.0), 12.0) - pow(H.z, 12.0), 0.0) * 0.009; // matte paper, a faint gloss
+    // only a trace of light and shade: the picture stays flat, and reads as bent paper by how it is displaced
+    c = c * mix(1.0, clamp(light, 0.55, 1.2), 0.15) + sheen;
     // screen-space ambient occlusion: paper standing higher close by keeps some sky light off this spot,
     // so the bottoms of folds and the paper under an overlap darken softly
     vec2 here = gl_FragCoord.xy / uCanvas;
@@ -245,7 +246,7 @@ void main() {
       float rise = hs.r * 160.0 - 32.0 - vPos.z;
       occ += clamp((rise - 1.0) / 14.0, 0.0, 1.0) * (1.0 - 0.5 * t);
     }
-    c *= 1.0 - 0.5 * clamp(occ / 10.0, 0.0, 1.0);
+    c *= 1.0 - 0.15 * clamp(occ / 10.0, 0.0, 1.0);
   }
   o = vec4(c, uAlpha);
 }
