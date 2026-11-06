@@ -180,13 +180,12 @@ uniform vec2 uOffset;     // css px
 uniform float uDepth;     // css px of height that maps to the full depth range
 uniform float uShadow;    // > 0: the shadow outline pass (flattened onto the wall, pushed a little away from the light)
 out vec2 vUV;
-out vec3 vPos;
 void main() {
   vec2 xy = aPos.xy;
   float z = aPos.z;
   if (uShadow > 0.0) { xy += vec2(0.25, 0.45) * clamp(z, 0.0, 24.0); z = -1.0; } // high parts cast a little further, but not far
   vec2 s = uCenter + (xy - uSheetC) * uScale + uOffset;
-  vUV = aUV; vPos = aPos;
+  vUV = aUV;
   gl_Position = vec4(s.x / uView.x * 2.0 - 1.0, 1.0 - s.y / uView.y * 2.0, clamp(-z / uDepth, -1.0, 1.0), 1.0);
 }
 </script>
@@ -199,23 +198,13 @@ uniform vec4 uCrop;
 uniform float uMirror;
 uniform float uShadow;
 uniform float uAlpha;
-uniform float uFacets;   // 1 = folded-paper facets: each triangle lit softly by its own tilt; 0 = no light and shade
 in vec2 vUV;
-in vec3 vPos;
 out vec4 o;
 void main() {
   if (uShadow > 0.0) { o = vec4(1.0); return; }      // outline only: overlapping layers do not add up
   vec2 uv = uCrop.xy + vUV * uCrop.zw;
   if (uMirror > 0.5) uv.x = 1.0 - uv.x;
-  vec3 c = texture(uImg, uv).rgb;
-  if (uFacets > 0.5) {
-    vec3 N = normalize(cross(dFdx(vPos), dFdy(vPos)));  // one tilt per triangle
-    if (N.z < 0.0) N = -N;                              // paper has two sides
-    N = normalize(vec3(N.xy * 2.0, N.z));               // small tilts still read as facets
-    vec3 L = normalize(vec3(-0.45, -0.62, 0.64));       // soft light from the upper left (y runs down)
-    c *= clamp(1.0 + 0.6 * (dot(N, L) - L.z), 0.7, 1.12);
-  }
-  o = vec4(c, uAlpha);
+  o = vec4(texture(uImg, uv).rgb, uAlpha);
 }
 </script>
 
@@ -242,7 +231,7 @@ let progBg, progSheet, progBlur, progShade;
 const U = { bg: {}, sheet: {}, blur: {}, shade: {} };
 let shTex = [], shFb = [], shW = 0, shH = 0;
 let fullVao, sheetVao, posBuf, uvBuf, idxBuf, sheetCount = 0;
-let lpVao, lpPosBuf, lpUvBuf, lpIdxBuf, lpCount = 0;   // the low-poly mesh (big flat triangles)
+let lpVao, lpPosBuf, lpUvBuf, lpIdxBuf, lpCount = 0;   // the low-poly mesh (big flat triangles, no light and shade)
 let facets = true;
 let videoTex, paperTex, capFb, capColor, capDepth, capW = 0, capH = 0;
 
@@ -280,7 +269,7 @@ if (!gl) {
   try {
     progBg = program('vFull', 'fBg', [], ['uTex', 'uCrop', 'uMirror', 'uDim'], U.bg);
     progSheet = program('vSheet', 'fSheet', ['aPos', 'aUV'], ['uView', 'uCenter', 'uSheetC', 'uScale', 'uOffset', 'uDepth',
-      'uShadow', 'uImg', 'uCrop', 'uMirror', 'uAlpha', 'uFacets'], U.sheet);
+      'uShadow', 'uImg', 'uCrop', 'uMirror', 'uAlpha'], U.sheet);
     progBlur = program('vFull', 'fBlur', [], ['uTex', 'uDir'], U.blur);
     progShade = program('vFull', 'fShade', [], ['uTex', 'uAmt'], U.shade);
     fullVao = gl.createVertexArray();
@@ -909,7 +898,6 @@ function drawSheet(o) {
   gl.uniform2f(U.sheet.uSheetC, sheetW / 2, sheetH / 2);
   gl.uniform1f(U.sheet.uScale, o.scale * fit());
   gl.uniform1f(U.sheet.uDepth, unit * 2);
-  gl.uniform1f(U.sheet.uFacets, facets && !live ? 1 : 0);
   gl.bindVertexArray(vao);
   if (o.shadow) { // a faint, soft shadow on the wall
     // 1) the sheet's outline, once, into a small image (a quarter of the screen size), nudged away from the light
