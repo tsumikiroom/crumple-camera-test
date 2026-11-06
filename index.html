@@ -49,6 +49,7 @@ button {
   text-align: center; pointer-events: none; transition: opacity .5s; color: var(--ink); opacity: 0;
   text-shadow: 0 1px 6px rgba(0,0,0,.8);
 }
+#hint.onwall { color: #3a3733; text-shadow: 0 0 8px rgba(255,255,255,.9); }  /* on the light wall behind a peeled sheet */
 #toast {
   position: fixed; left: 50%; top: 42%; transform: translate(-50%, -50%); padding: 10px 18px; border-radius: 999px;
   background: var(--bar); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
@@ -112,7 +113,7 @@ button {
   <div class="row"><button id="saveBtn">Save to device</button><button id="closeViewer">Close</button></div>
 </div>
 
-<!-- full-screen triangle for the monitor behind the sheet -->
+<!-- full-screen triangle for the wall behind the sheet and the shadow passes -->
 <script type="x-shader/x-vertex" id="vFull">#version 300 es
 out vec2 vUV;
 void main() {
@@ -121,13 +122,13 @@ void main() {
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }
 </script>
-<!-- the live camera on the "monitor" behind the sheet -->
+<!-- behind the sheet: the live camera while the picture is on the screen, a light wall once it is peeled off -->
 <script type="x-shader/x-fragment" id="fBg">#version 300 es
 precision highp float;
 uniform sampler2D uTex;
 uniform vec4 uCrop;     // video uv = uCrop.xy + screen uv * uCrop.zw (cover fit)
 uniform float uMirror;
-uniform float uDim;     // 1 = plain live picture, lower = the bare monitor after the sheet came off
+uniform float uDim;     // 1 = plain live picture, lower = the sheet is off and the light wall shows instead
 in vec2 vUV;
 out vec4 o;
 void main() {
@@ -135,11 +136,35 @@ void main() {
   vec2 uv = uCrop.xy + P * uCrop.zw;
   if (uMirror > 0.5) uv.x = 1.0 - uv.x;
   vec3 c = texture(uTex, uv).rgb;
-  float g = dot(c, vec3(0.299, 0.587, 0.114));
-  c = mix(vec3(g), c, uDim);
-  float vig = 1.0 - (1.0 - uDim) * 0.6 * dot(P - 0.5, P - 0.5) * 2.0;
-  o = vec4(c * uDim * vig, 1.0);
+  // a warm off-white wall, a touch lighter at the top like soft daylight, a little darker toward the corners
+  vec3 wall = mix(vec3(0.955, 0.95, 0.94), vec3(0.88, 0.875, 0.865), P.y * 0.7 + dot(P - 0.5, P - 0.5) * 0.6);
+  // a speck of noise hides the steps of a smooth gradient on 8-bit screens
+  wall += (fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
+  o = vec4(mix(wall, c, uDim), 1.0);
 }
+</script>
+<!-- soft shadow: blur the sheet's outline (drawn once, small) along one direction -->
+<script type="x-shader/x-fragment" id="fBlur">#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform vec2 uDir;      // one step of the blur, in texture uv
+in vec2 vUV;
+out vec4 o;
+void main() {
+  float w[5] = float[5](0.227, 0.194, 0.122, 0.054, 0.016);
+  float a = texture(uTex, vUV).r * w[0];
+  for (int i = 1; i < 5; i++) a += (texture(uTex, vUV + uDir * float(i)).r + texture(uTex, vUV - uDir * float(i)).r) * w[i];
+  o = vec4(a, a, a, 1.0);
+}
+</script>
+<!-- lay the blurred outline on the wall as a faint shadow -->
+<script type="x-shader/x-fragment" id="fShade">#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform float uAmt;
+in vec2 vUV;
+out vec4 o;
+void main() { o = vec4(0.0, 0.0, 0.0, texture(uTex, vUV).r * uAmt); }
 </script>
 <!-- the sheet: a 3D grid moved by the paper simulation (positions in css px, z toward the viewer) -->
 <script type="x-shader/x-vertex" id="vSheet">#version 300 es
@@ -151,12 +176,12 @@ uniform vec2 uSheetC;     // sheet centre in its own coordinates (css px when it
 uniform float uScale;
 uniform vec2 uOffset;     // css px
 uniform float uDepth;     // css px of height that maps to the full depth range
-uniform float uShadow;    // > 0: the shadow pass (flattened onto the monitor, pushed away from the light)
+uniform float uShadow;    // > 0: the shadow outline pass (flattened onto the wall, pushed a little away from the light)
 out vec2 vUV;
 void main() {
   vec2 xy = aPos.xy;
   float z = aPos.z;
-  if (uShadow > 0.0) { xy += vec2(0.35, 0.6) * z; z = -1.0; }
+  if (uShadow > 0.0) { xy += vec2(0.25, 0.45) * clamp(z, 0.0, 24.0); z = -1.0; } // high parts cast a little further, but not far
   vec2 s = uCenter + (xy - uSheetC) * uScale + uOffset;
   vUV = aUV;
   gl_Position = vec4(s.x / uView.x * 2.0 - 1.0, 1.0 - s.y / uView.y * 2.0, clamp(-z / uDepth, -1.0, 1.0), 1.0);
@@ -174,7 +199,7 @@ uniform float uAlpha;
 in vec2 vUV;
 out vec4 o;
 void main() {
-  if (uShadow > 0.0) { o = vec4(0.0, 0.0, 0.0, uShadow); return; }
+  if (uShadow > 0.0) { o = vec4(1.0); return; }      // outline only: overlapping layers do not add up
   vec2 uv = uCrop.xy + vUV * uCrop.zw;
   if (uMirror > 0.5) uv.x = 1.0 - uv.x;
   o = vec4(texture(uImg, uv).rgb, uAlpha);
@@ -200,8 +225,9 @@ function showError(text) {
 // ---------- WebGL2 ----------
 const gl = cv.getContext('webgl2', { antialias: true, alpha: false, preserveDrawingBuffer: TEST });
 let ready = false;
-let progBg, progSheet;
-const U = { bg: {}, sheet: {} };
+let progBg, progSheet, progBlur, progShade;
+const U = { bg: {}, sheet: {}, blur: {}, shade: {} };
+let shTex = [], shFb = [], shW = 0, shH = 0;
 let fullVao, sheetVao, posBuf, uvBuf, idxBuf, sheetCount = 0;
 let videoTex, paperTex, capFb, capColor, capDepth, capW = 0, capH = 0;
 
@@ -240,6 +266,8 @@ if (!gl) {
     progBg = program('vFull', 'fBg', [], ['uTex', 'uCrop', 'uMirror', 'uDim'], U.bg);
     progSheet = program('vSheet', 'fSheet', ['aPos', 'aUV'], ['uView', 'uCenter', 'uSheetC', 'uScale', 'uOffset', 'uDepth',
       'uShadow', 'uImg', 'uCrop', 'uMirror', 'uAlpha'], U.sheet);
+    progBlur = program('vFull', 'fBlur', [], ['uTex', 'uDir'], U.blur);
+    progShade = program('vFull', 'fShade', [], ['uTex', 'uAmt'], U.shade);
     fullVao = gl.createVertexArray();
     videoTex = makeTex();
     paperTex = makeTex();
@@ -359,14 +387,22 @@ function grabAt(id, sx, sy) {
     if (d2 > r2) continue;
     ids.push(k); w.push(Math.exp(-3 * d2 / r2)); ox.push(dx); oy.push(dy);
   }
-  if (ids.length) grabs.set(id, { ids, w, ox, oy, x: sx, y: sy, fx: sx, fy: sy });
+  if (ids.length) grabs.set(id, { ids, w, ox, oy, x: sx, y: sy, fx: sx, fy: sy, cx: sx, cy: sy });
+}
+function stepGrabs() { // the held spot chases the finger at most a little over one grid gap a step, so a fast flick cannot shoot paper through paper
+  const lim = gap * 1.2;
+  for (const g of grabs.values()) {
+    const dx = g.x - g.cx, dy = g.y - g.cy, d = Math.hypot(dx, dy);
+    const f = d > lim ? lim / d : 1;
+    g.cx += dx * f; g.cy += dy * f;
+  }
 }
 function pullGrabs(strength) {
   for (const g of grabs.values()) {
     for (let n = 0; n < g.ids.length; n++) {
       const k = g.ids[n] * 3, f = g.w[n] * strength;
-      P[k] += (g.x + g.ox[n] - P[k]) * f;
-      P[k + 1] += (g.y + g.oy[n] - P[k + 1]) * f;
+      P[k] += (g.cx + g.ox[n] - P[k]) * f;
+      P[k + 1] += (g.cy + g.oy[n] - P[k + 1]) * f;
     }
   }
 }
@@ -389,6 +425,7 @@ function simulate(dt) {
       P[k] += dx * f; P[k + 1] += dy * f; P[k + 2] += dz * f;
     }
   }
+  stepGrabs();
   pullGrabs(0.5);
   for (let it = 0; it < ITER; it++) {
     for (let c = 0; c < nC; c++) {
@@ -400,6 +437,7 @@ function simulate(dt) {
       P[b] -= dx * f; P[b + 1] -= dy * f; P[b + 2] -= dz * f;
     }
     pullGrabs(1);
+    if (it % 2 === 1) collide();           // keep the layers apart inside the solve, not only at the end
     if (!ballMode) {
       const contact = gap * 0.3;
       for (let k = 0; k < N * 3; k += 3) {
@@ -411,7 +449,6 @@ function simulate(dt) {
       }
     }
   }
-  collide();
   // plastic folding: lengths that were bent far enough keep part of the bend.
   // Only while a finger is on the paper (or it is being balled up): left alone, the shape stays as it is.
   const creep = ballMode ? 0.2 : grabs.size ? 0.15 : 0;
@@ -427,7 +464,7 @@ function simulate(dt) {
 // keep the sheet from passing through itself: points that are far apart on the sheet but close in space push apart
 let cellHead, cellNext;
 function collide() {
-  const r = gap * 0.75, r2 = r * r, cs = gap, W = Math.ceil(sheetW * 2 / cs) + 4, H = Math.ceil(sheetH * 2 / cs) + 4, nCell = W * H;
+  const r = gap * 1.5, r2 = r * r, cs = r, W = Math.ceil(sheetW * 2 / cs) + 4, H = Math.ceil(sheetH * 2 / cs) + 4, nCell = W * H;
   if (!cellHead || cellHead.length !== nCell) cellHead = new Int32Array(nCell);
   if (!cellNext || cellNext.length !== N) cellNext = new Int32Array(N);
   cellHead.fill(-1);
@@ -823,18 +860,52 @@ function drawSheet(o) {
   gl.uniform1f(U.sheet.uScale, o.scale * fit());
   gl.uniform1f(U.sheet.uDepth, unit * 2);
   gl.bindVertexArray(sheetVao);
-  if (o.shadow) { // soft shadow on the monitor: a few faint copies, each pushed away from the light
+  if (o.shadow) { // a faint, soft shadow on the wall
+    // 1) the sheet's outline, once, into a small image (a quarter of the screen size), nudged away from the light
+    const w = Math.max(1, Math.ceil(cv.width / 4)), h = Math.max(1, Math.ceil(cv.height / 4));
+    if (w !== shW || h !== shH) {
+      for (let i = 0; i < 2; i++) {
+        if (!shTex[i]) { shTex[i] = makeTex(); shFb[i] = gl.createFramebuffer(); }
+        gl.bindTexture(gl.TEXTURE_2D, shTex[i]);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, shFb[i]);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, shTex[i], 0);
+      }
+      shW = w; shH = h;
+    }
     gl.disable(gl.DEPTH_TEST);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, shFb[0]);
+    gl.viewport(0, 0, w, h);
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.uniform1f(U.sheet.uShadow, 1);
+    gl.uniform2f(U.sheet.uOffset, o.offset[0] + (2 + 4 * holdLift) * lift, o.offset[1] + (5 + 10 * holdLift) * lift);
+    gl.drawElements(gl.TRIANGLES, sheetCount, gl.UNSIGNED_INT, 0);
+    // 2) blur it across, then down (softer while the sheet is held up)
+    gl.useProgram(progBlur);
+    gl.bindVertexArray(fullVao);
+    gl.activeTexture(gl.TEXTURE0);
+    const spread = 1.2 + 1.2 * holdLift;
+    for (const [src, dst, dx, dy] of [[0, 1, spread / w, 0], [1, 0, 0, spread / h]]) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, shFb[dst]);
+      gl.bindTexture(gl.TEXTURE_2D, shTex[src]);
+      gl.uniform2f(U.blur.uDir, dx, dy);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+    // 3) lay it on the wall
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, cv.width, cv.height);
+    gl.useProgram(progShade);
+    gl.bindTexture(gl.TEXTURE_2D, shTex[0]);
+    gl.uniform1f(U.shade.uAmt, 0.2 * lift * o.alpha);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    const sx = (4 + 4 * holdLift) * lift, sy = (10 + 12 * holdLift) * lift, r = (3 + 6 * holdLift) * lift + 2;
-    const taps = [[0, 0], [r, 0], [-r, 0], [0, r], [0, -r]];
-    gl.uniform1f(U.sheet.uShadow, 0.07 * lift * o.alpha);
-    for (const t of taps) {
-      gl.uniform2f(U.sheet.uOffset, o.offset[0] + sx + t[0], o.offset[1] + sy + t[1]);
-      gl.drawElements(gl.TRIANGLES, sheetCount, gl.UNSIGNED_INT, 0);
-    }
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.disable(gl.BLEND);
+    // back to drawing the sheet
+    gl.useProgram(progSheet);
+    gl.bindVertexArray(sheetVao);
+    gl.bindTexture(gl.TEXTURE_2D, live ? videoTex : paperTex);
   }
   gl.uniform1f(U.sheet.uShadow, 0);
   gl.uniform1f(U.sheet.uAlpha, o.alpha);
@@ -903,13 +974,14 @@ function frame(now) {
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.viewport(0, 0, cv.width, cv.height);
-  // the monitor behind: the live camera, dimmed while a sheet is off it
+  // behind the sheet: the live camera, turning into the light wall while a sheet is off it
   gl.useProgram(progBg);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, videoTex);
   const crop = coverCrop(video.videoWidth, video.videoHeight);
   gl.uniform4f(U.bg.uCrop, crop[0], crop[1], crop[2], crop[3]);
   gl.uniform1f(U.bg.uMirror, mirror ? 1 : 0);
-  gl.uniform1f(U.bg.uDim, phase === 'live' ? 0.3 + 0.7 * fade : 1 - 0.7 * lift);
+  gl.uniform1f(U.bg.uDim, phase === 'live' ? fade : 1 - lift);
+  hint.classList.toggle('onwall', phase !== 'live');
   gl.bindVertexArray(fullVao);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.bindVertexArray(null);
