@@ -43,6 +43,7 @@ button {
 #top.show { display: flex; }
 #top button { pointer-events: auto; background: var(--bar); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
 #photosBtn.pulse { animation: pulse .6s ease; }
+#facetsBtn.on { background: rgba(255,255,255,.85); color: #1a1918; }
 @keyframes pulse { 0% { transform: scale(1); } 40% { transform: scale(1.18); background: var(--hot); } 100% { transform: scale(1); } }
 #hint {
   position: fixed; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom, 0px) + 20px);
@@ -96,6 +97,7 @@ button {
 
 <div id="top">
   <button id="flip">Switch camera</button>
+  <button id="facetsBtn" class="on">Facets</button>
   <button id="photosBtn">Photos 0</button>
 </div>
 <div id="hint"></div>
@@ -178,12 +180,13 @@ uniform vec2 uOffset;     // css px
 uniform float uDepth;     // css px of height that maps to the full depth range
 uniform float uShadow;    // > 0: the shadow outline pass (flattened onto the wall, pushed a little away from the light)
 out vec2 vUV;
+out vec3 vPos;
 void main() {
   vec2 xy = aPos.xy;
   float z = aPos.z;
   if (uShadow > 0.0) { xy += vec2(0.25, 0.45) * clamp(z, 0.0, 24.0); z = -1.0; } // high parts cast a little further, but not far
   vec2 s = uCenter + (xy - uSheetC) * uScale + uOffset;
-  vUV = aUV;
+  vUV = aUV; vPos = aPos;
   gl_Position = vec4(s.x / uView.x * 2.0 - 1.0, 1.0 - s.y / uView.y * 2.0, clamp(-z / uDepth, -1.0, 1.0), 1.0);
 }
 </script>
@@ -196,13 +199,23 @@ uniform vec4 uCrop;
 uniform float uMirror;
 uniform float uShadow;
 uniform float uAlpha;
+uniform float uFacets;   // 1 = folded-paper facets: each triangle lit softly by its own tilt; 0 = no light and shade
 in vec2 vUV;
+in vec3 vPos;
 out vec4 o;
 void main() {
   if (uShadow > 0.0) { o = vec4(1.0); return; }      // outline only: overlapping layers do not add up
   vec2 uv = uCrop.xy + vUV * uCrop.zw;
   if (uMirror > 0.5) uv.x = 1.0 - uv.x;
-  o = vec4(texture(uImg, uv).rgb, uAlpha);
+  vec3 c = texture(uImg, uv).rgb;
+  if (uFacets > 0.5) {
+    vec3 N = normalize(cross(dFdx(vPos), dFdy(vPos)));  // one tilt per triangle
+    if (N.z < 0.0) N = -N;                              // paper has two sides
+    N = normalize(vec3(N.xy * 2.0, N.z));               // small tilts still read as facets
+    vec3 L = normalize(vec3(-0.45, -0.62, 0.64));       // soft light from the upper left (y runs down)
+    c *= clamp(1.0 + 0.6 * (dot(N, L) - L.z), 0.7, 1.12);
+  }
+  o = vec4(c, uAlpha);
 }
 </script>
 
@@ -229,6 +242,8 @@ let progBg, progSheet, progBlur, progShade;
 const U = { bg: {}, sheet: {}, blur: {}, shade: {} };
 let shTex = [], shFb = [], shW = 0, shH = 0;
 let fullVao, sheetVao, posBuf, uvBuf, idxBuf, sheetCount = 0;
+let lpVao, lpPosBuf, lpUvBuf, lpIdxBuf, lpCount = 0;   // the low-poly mesh (big flat triangles)
+let facets = true;
 let videoTex, paperTex, capFb, capColor, capDepth, capW = 0, capH = 0;
 
 function compile(type, id) {
@@ -265,7 +280,7 @@ if (!gl) {
   try {
     progBg = program('vFull', 'fBg', [], ['uTex', 'uCrop', 'uMirror', 'uDim'], U.bg);
     progSheet = program('vSheet', 'fSheet', ['aPos', 'aUV'], ['uView', 'uCenter', 'uSheetC', 'uScale', 'uOffset', 'uDepth',
-      'uShadow', 'uImg', 'uCrop', 'uMirror', 'uAlpha'], U.sheet);
+      'uShadow', 'uImg', 'uCrop', 'uMirror', 'uAlpha', 'uFacets'], U.sheet);
     progBlur = program('vFull', 'fBlur', [], ['uTex', 'uDir'], U.blur);
     progShade = program('vFull', 'fShade', [], ['uTex', 'uAmt'], U.shade);
     fullVao = gl.createVertexArray();
@@ -275,6 +290,15 @@ if (!gl) {
     gl.uniform1i(U.sheet.uImg, 0);
     gl.useProgram(progBg);
     gl.uniform1i(U.bg.uTex, 0);
+    lpVao = gl.createVertexArray();
+    gl.bindVertexArray(lpVao);
+    lpPosBuf = gl.createBuffer(); lpUvBuf = gl.createBuffer(); lpIdxBuf = gl.createBuffer();
+    [[lpPosBuf, 3], [lpUvBuf, 2]].forEach(([b, n], i) => {
+      gl.bindBuffer(gl.ARRAY_BUFFER, b);
+      gl.enableVertexAttribArray(i);
+      gl.vertexAttribPointer(i, n, gl.FLOAT, false, 0, 0);
+    });
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, lpIdxBuf);
     sheetVao = gl.createVertexArray();
     gl.bindVertexArray(sheetVao);
     posBuf = gl.createBuffer(); uvBuf = gl.createBuffer(); idxBuf = gl.createBuffer();
@@ -312,6 +336,9 @@ let NX = 2, NY = 2, N = 4, gap = 1;
 let P, Q, R0;                      // positions, previous positions, rest positions
 // drawn copy: smoothed and split twice as fine, so the picture bends along smooth curves
 let RX = 2, RY = 2, SM, RP;
+// low-poly copy: a coarse grid taken straight from the paper's points
+const LK = 4;
+let LX = 2, LY = 2, LP;
 let cA, cB, cRest, cK, cPlastic, nC = 0;
 const ITER = 8;
 
@@ -358,6 +385,24 @@ function buildSheet() {
   gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
   gl.bufferData(gl.ARRAY_BUFFER, UVS, gl.STATIC_DRAW);
   gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+  // low-poly: every LK-th point of the paper is a corner; the diagonals alternate like an origami tessellation
+  const col = (i) => Math.min(i * LK, NX - 1), row = (j) => Math.min(j * LK, NY - 1);
+  LX = Math.ceil((NX - 1) / LK) + 1; LY = Math.ceil((NY - 1) / LK) + 1;
+  LP = new Float32Array(LX * LY * 3);
+  const LUV = new Float32Array(LX * LY * 2);
+  for (let j = 0; j < LY; j++) for (let i = 0; i < LX; i++) { LUV[(j * LX + i) * 2] = col(i) / (NX - 1); LUV[(j * LX + i) * 2 + 1] = row(j) / (NY - 1); }
+  const lidx = new Uint32Array((LX - 1) * (LY - 1) * 6);
+  n = 0;
+  for (let j = 0; j < LY - 1; j++) for (let i = 0; i < LX - 1; i++) {
+    const a = j * LX + i, b = a + 1, c = a + LX, d = c + 1;
+    if ((i + j) % 2) { lidx[n++] = a; lidx[n++] = c; lidx[n++] = b; lidx[n++] = b; lidx[n++] = c; lidx[n++] = d; }
+    else { lidx[n++] = a; lidx[n++] = c; lidx[n++] = d; lidx[n++] = a; lidx[n++] = d; lidx[n++] = b; }
+  }
+  lpCount = lidx.length;
+  gl.bindVertexArray(lpVao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, lpUvBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, LUV, gl.STATIC_DRAW);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, lidx, gl.STATIC_DRAW);
   gl.bindVertexArray(null);
   sizeDirty = false;
   flatten();
@@ -410,10 +455,8 @@ function pullGrabs(strength) {
 let ballMode = null; // { cx, cy, r } while the paper is being balled up
 function simulate(dt) {
   const g = 1.5 * dt;                             // bulges settle back toward the monitor
-  // with no finger on it the paper comes to rest quickly instead of drifting on
-  const keep = grabs.size || ballMode ? 0.96 : 0.6;
   for (let k = 0; k < N * 3; k += 3) {
-    const vx = (P[k] - Q[k]) * keep, vy = (P[k + 1] - Q[k + 1]) * keep, vz = (P[k + 2] - Q[k + 2]) * keep;
+    const vx = (P[k] - Q[k]) * 0.96, vy = (P[k + 1] - Q[k + 1]) * 0.96, vz = (P[k + 2] - Q[k + 2]) * 0.96;
     Q[k] = P[k]; Q[k + 1] = P[k + 1]; Q[k + 2] = P[k + 2];
     P[k] += vx; P[k + 1] += vy; P[k + 2] += vz - (ballMode ? 0 : P[k + 2] * g);
   }
@@ -449,10 +492,9 @@ function simulate(dt) {
       }
     }
   }
-  // plastic folding: lengths that were bent far enough keep part of the bend.
-  // Only while a finger is on the paper (or it is being balled up): left alone, the shape stays as it is.
-  const creep = ballMode ? 0.2 : grabs.size ? 0.15 : 0;
-  for (let c = 0; creep && c < nC; c++) {
+  // plastic folding: lengths that were bent far enough keep part of the bend
+  const creep = ballMode ? 0.2 : 0.15;
+  for (let c = 0; c < nC; c++) {
     if (!cPlastic[c]) continue;
     const a = cA[c] * 3, b = cB[c] * 3;
     const d = Math.hypot(P[b] - P[a], P[b + 1] - P[a + 1], P[b + 2] - P[a + 2]);
@@ -493,6 +535,12 @@ function collide() {
   }
 }
 
+function updateLowPoly() {
+  for (let j = 0; j < LY; j++) for (let i = 0; i < LX; i++) {
+    const src = (Math.min(j * LK, NY - 1) * NX + Math.min(i * LK, NX - 1)) * 3, dst = (j * LX + i) * 3;
+    LP[dst] = P[src]; LP[dst + 1] = P[src + 1]; LP[dst + 2] = P[src + 2];
+  }
+}
 function updateRender() {
   // soften the grid's zigzag at sharp folds, then split each cell in four with a smooth (four point) curve,
   // so the picture bends along smooth curves rather than the steps of the grid
@@ -634,6 +682,7 @@ function openCamera(want) {
 }
 for (const b of document.querySelectorAll('[data-facing]')) b.addEventListener('click', () => openCamera(b.dataset.facing));
 $('flip').addEventListener('click', () => openCamera(facing === 'user' ? 'environment' : 'user'));
+$('facetsBtn').addEventListener('click', () => { facets = !facets; $('facetsBtn').classList.toggle('on', facets); });
 
 function coverCrop(vw, vh) { // video uv rectangle that fills the screen
   if (!vw || !vh) return [0, 0, 1, 1];
@@ -849,6 +898,7 @@ renderGrid();
 // ---------- drawing ----------
 function drawSheet(o) {
   const live = phase === 'live';
+  const vao = facets ? lpVao : sheetVao, count = facets ? lpCount : sheetCount;
   gl.useProgram(progSheet);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, live ? videoTex : paperTex);
   const crop = live ? coverCrop(video.videoWidth, video.videoHeight) : paperCrop;
@@ -859,7 +909,8 @@ function drawSheet(o) {
   gl.uniform2f(U.sheet.uSheetC, sheetW / 2, sheetH / 2);
   gl.uniform1f(U.sheet.uScale, o.scale * fit());
   gl.uniform1f(U.sheet.uDepth, unit * 2);
-  gl.bindVertexArray(sheetVao);
+  gl.uniform1f(U.sheet.uFacets, facets && !live ? 1 : 0);
+  gl.bindVertexArray(vao);
   if (o.shadow) { // a faint, soft shadow on the wall
     // 1) the sheet's outline, once, into a small image (a quarter of the screen size), nudged away from the light
     const w = Math.max(1, Math.ceil(cv.width / 4)), h = Math.max(1, Math.ceil(cv.height / 4));
@@ -880,7 +931,7 @@ function drawSheet(o) {
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.uniform1f(U.sheet.uShadow, 1);
     gl.uniform2f(U.sheet.uOffset, o.offset[0] + (2 + 4 * holdLift) * lift, o.offset[1] + (5 + 10 * holdLift) * lift);
-    gl.drawElements(gl.TRIANGLES, sheetCount, gl.UNSIGNED_INT, 0);
+    gl.drawElements(gl.TRIANGLES, count, gl.UNSIGNED_INT, 0);
     // 2) blur it across, then down (softer while the sheet is held up)
     gl.useProgram(progBlur);
     gl.bindVertexArray(fullVao);
@@ -904,7 +955,7 @@ function drawSheet(o) {
     gl.disable(gl.BLEND);
     // back to drawing the sheet
     gl.useProgram(progSheet);
-    gl.bindVertexArray(sheetVao);
+    gl.bindVertexArray(vao);
     gl.bindTexture(gl.TEXTURE_2D, live ? videoTex : paperTex);
   }
   gl.uniform1f(U.sheet.uShadow, 0);
@@ -914,13 +965,13 @@ function drawSheet(o) {
   gl.depthFunc(gl.LEQUAL);
   gl.clear(gl.DEPTH_BUFFER_BIT);
   if (o.alpha < 1) { gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); }
-  gl.drawElements(gl.TRIANGLES, sheetCount, gl.UNSIGNED_INT, 0);
+  gl.drawElements(gl.TRIANGLES, count, gl.UNSIGNED_INT, 0);
   gl.disable(gl.BLEND);
   gl.disable(gl.DEPTH_TEST);
   gl.bindVertexArray(null);
 }
 
-let lastT = performance.now(), simDebt = 0, restT = 0;
+let lastT = performance.now(), simDebt = 0;
 const SIM_DT = 1 / 60;
 function frame(now) {
   requestAnimationFrame(frame);
@@ -942,10 +993,8 @@ function frame(now) {
     if (p.held > HOLD_MS) startHold(id);
   }
 
-  // the paper sleeps a moment after the last finger leaves: the solver's small leftover jitter would
-  // otherwise keep reshaping it with nobody touching it
-  restT = phase === 'peeled' && !grabs.size ? restT + dt : 0;
-  if (phase === 'ball' || (phase === 'peeled' && restT < 0.8)) {
+  // the paper moves only while a finger is on it: the moment the last finger leaves, it stays exactly as it is
+  if (phase === 'ball' || (phase === 'peeled' && grabs.size)) {
     simDebt = Math.min(simDebt + dt, SIM_DT); // at most one step a frame: a slow phone slows the paper down instead of falling behind
     while (simDebt >= SIM_DT) { simulate(SIM_DT); simDebt -= SIM_DT; }
   } else if (phase === 'peeled') Q.set(P);
@@ -969,8 +1018,8 @@ function frame(now) {
   }
   scale = phase === 'live' ? 1 : 1 - 0.07 * lift + 0.035 * holdLift;
 
-  updateRender();
-  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf); gl.bufferData(gl.ARRAY_BUFFER, RP, gl.DYNAMIC_DRAW);
+  if (facets) { updateLowPoly(); gl.bindBuffer(gl.ARRAY_BUFFER, lpPosBuf); gl.bufferData(gl.ARRAY_BUFFER, LP, gl.DYNAMIC_DRAW); }
+  else { updateRender(); gl.bindBuffer(gl.ARRAY_BUFFER, posBuf); gl.bufferData(gl.ARRAY_BUFFER, RP, gl.DYNAMIC_DRAW); }
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.viewport(0, 0, cv.width, cv.height);
