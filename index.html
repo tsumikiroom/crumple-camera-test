@@ -185,13 +185,13 @@ uniform vec2 uSheetC;     // sheet centre in its own coordinates (css px when it
 uniform float uScale;
 uniform vec2 uOffset;     // css px
 uniform float uDepth;     // css px of height that maps to the full depth range
-uniform float uShadow;    // > 0: the shadow outline pass (flattened onto the wall, pushed a little away from the light)
+uniform float uShadow;    // 1: the shadow outline pass (flattened onto the wall, nudged away from the light); 2: the height pass
 out vec2 vUV;
 out vec3 vPos;
 void main() {
   vec2 xy = aPos.xy;
   float z = aPos.z;
-  if (uShadow > 0.0) { xy += vec2(0.25, 0.45) * clamp(z, 0.0, 24.0); z = -1.0; } // high parts cast a little further, but not far
+  if (uShadow > 0.5 && uShadow < 1.5) { xy += vec2(0.25, 0.45) * clamp(z, 0.0, 24.0); z = -1.0; } // high parts cast a little further, but not far
   vec2 s = uCenter + (xy - uSheetC) * uScale + uOffset;
   vUV = aUV; vPos = aPos;
   gl_Position = vec4(s.x / uView.x * 2.0 - 1.0, 1.0 - s.y / uView.y * 2.0, clamp(-z / uDepth, -1.0, 1.0), 1.0);
@@ -207,11 +207,15 @@ uniform float uMirror;
 uniform float uShadow;
 uniform float uAlpha;
 uniform float uFacets;   // 1 = the angular low-poly shape: each triangle is lit by its tilt
+uniform sampler2D uHeight; // the height of the top-most paper on screen (for ambient occlusion)
+uniform vec2 uCanvas;    // canvas size in pixels
+uniform float uPx;       // canvas pixels per css px
 in vec2 vUV;
 in vec3 vPos;
 out vec4 o;
 void main() {
-  if (uShadow > 0.0) { o = vec4(1.0); return; }      // outline only: overlapping layers do not add up
+  if (uShadow > 1.5) { o = vec4((vPos.z + 32.0) / 160.0, 0.0, 0.0, 1.0); return; } // height, -32..128 css px
+  if (uShadow > 0.5) { o = vec4(1.0); return; }      // outline only: overlapping layers do not add up
   vec2 uv = uCrop.xy + vUV * uCrop.zw;
   if (uMirror > 0.5) uv.x = 1.0 - uv.x;
   vec3 c = texture(uImg, uv).rgb;
@@ -226,8 +230,22 @@ void main() {
     float key = max(dot(N, K), 0.0), fill = max(dot(N, F), 0.0), sky = 0.5 + 0.5 * N.z;
     float light = (0.62 * key + 0.18 * fill + 0.3 * sky) / (0.62 * K.z + 0.18 * F.z + 0.3);
     vec3 H = normalize(K + vec3(0.0, 0.0, 1.0));
-    float sheen = max(pow(max(dot(N, H), 0.0), 12.0) - pow(H.z, 12.0), 0.0) * 0.06;  // matte paper, a faint gloss
-    c = c * clamp(light, 0.55, 1.2) + sheen;
+    float sheen = max(pow(max(dot(N, H), 0.0), 12.0) - pow(H.z, 12.0), 0.0) * 0.03;  // matte paper, a faint gloss
+    c = c * mix(1.0, clamp(light, 0.55, 1.2), 0.5) + sheen;   // half strength
+    // screen-space ambient occlusion: paper standing higher close by keeps some sky light off this spot,
+    // so the bottoms of folds and the paper under an overlap darken softly
+    vec2 here = gl_FragCoord.xy / uCanvas;
+    float occ = 0.0;
+    for (int i = 0; i < 16; i++) {
+      float t = (float(i) + 0.5) / 16.0;
+      float a = float(i) * 2.39996;                      // golden-angle spiral
+      vec2 d = vec2(cos(a), sin(a)) * (4.0 + 26.0 * t) * uPx;
+      vec4 hs = texture(uHeight, here + d / uCanvas);
+      if (hs.a < 0.5) continue;                          // no paper there: open wall
+      float rise = hs.r * 160.0 - 32.0 - vPos.z;
+      occ += clamp((rise - 1.0) / 14.0, 0.0, 1.0) * (1.0 - 0.5 * t);
+    }
+    c *= 1.0 - 0.5 * clamp(occ / 10.0, 0.0, 1.0);
   }
   o = vec4(c, uAlpha);
 }
@@ -255,6 +273,7 @@ let ready = false;
 let progBg, progSheet, progBlur, progShade;
 const U = { bg: {}, sheet: {}, blur: {}, shade: {} };
 let shTex = [], shFb = [], shW = 0, shH = 0;
+let aoTex = null, aoFb = null, aoDepth = null, aoW = 0, aoH = 0;
 let fullVao, sheetVao, posBuf, uvBuf, idxBuf, sheetCount = 0;
 let lpVao, lpPosBuf, lpUvBuf, lpIdxBuf, lpCount = 0;   // the low-poly mesh (big flat triangles, lit by several soft lights)
 let facets = true;
@@ -294,7 +313,7 @@ if (!gl) {
   try {
     progBg = program('vFull', 'fBg', [], ['uTex', 'uCrop', 'uMirror', 'uDim'], U.bg);
     progSheet = program('vSheet', 'fSheet', ['aPos', 'aUV'], ['uView', 'uCenter', 'uSheetC', 'uScale', 'uOffset', 'uDepth',
-      'uShadow', 'uImg', 'uCrop', 'uMirror', 'uAlpha', 'uFacets'], U.sheet);
+      'uShadow', 'uImg', 'uCrop', 'uMirror', 'uAlpha', 'uFacets', 'uHeight', 'uCanvas', 'uPx'], U.sheet);
     progBlur = program('vFull', 'fBlur', [], ['uTex', 'uDir'], U.blur);
     progShade = program('vFull', 'fShade', [], ['uTex', 'uAmt'], U.shade);
     fullVao = gl.createVertexArray();
@@ -302,6 +321,7 @@ if (!gl) {
     paperTex = makeTex();
     gl.useProgram(progSheet);
     gl.uniform1i(U.sheet.uImg, 0);
+    gl.uniform1i(U.sheet.uHeight, 1);
     gl.useProgram(progBg);
     gl.uniform1i(U.bg.uTex, 0);
     lpVao = gl.createVertexArray();
@@ -915,6 +935,7 @@ renderGrid();
 // ---------- drawing ----------
 function drawSheet(o) {
   const live = phase === 'live';
+  const target = gl.getParameter(gl.FRAMEBUFFER_BINDING), vp = gl.getParameter(gl.VIEWPORT);
   const vao = facets ? lpVao : sheetVao, count = facets ? lpCount : sheetCount;
   gl.useProgram(progSheet);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, live ? videoTex : paperTex);
@@ -962,8 +983,8 @@ function drawSheet(o) {
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
     // 3) lay it on the wall
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, cv.width, cv.height);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target);
+    gl.viewport(vp[0], vp[1], vp[2], vp[3]);
     gl.useProgram(progShade);
     gl.bindTexture(gl.TEXTURE_2D, shTex[0]);
     gl.uniform1f(U.shade.uAmt, 0.24 * lift * o.alpha);
@@ -976,6 +997,39 @@ function drawSheet(o) {
     gl.bindVertexArray(vao);
     gl.bindTexture(gl.TEXTURE_2D, live ? videoTex : paperTex);
   }
+  if (facets && !live) { // the height of the top-most paper, at half size, for the ambient occlusion
+    const w = Math.max(1, Math.ceil(vp[2] / 2)), h = Math.max(1, Math.ceil(vp[3] / 2));
+    if (w !== aoW || h !== aoH) {
+      if (!aoTex) { aoTex = makeTex(); aoFb = gl.createFramebuffer(); aoDepth = gl.createRenderbuffer(); }
+      gl.bindTexture(gl.TEXTURE_2D, aoTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.bindRenderbuffer(gl.RENDERBUFFER, aoDepth);
+      gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, w, h);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, aoFb);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, aoTex, 0);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, aoDepth);
+      aoW = w; aoH = h;
+    }
+    // the height image must not be read while it is being drawn into: unbind it from the sheet's second texture slot
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, videoTex);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, live ? videoTex : paperTex); // making the image may have bound it here
+    gl.bindFramebuffer(gl.FRAMEBUFFER, aoFb);
+    gl.viewport(0, 0, w, h);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.uniform1f(U.sheet.uShadow, 2);
+    gl.uniform2f(U.sheet.uOffset, o.offset[0], o.offset[1]);
+    gl.drawElements(gl.TRIANGLES, count, gl.UNSIGNED_INT, 0);
+    gl.disable(gl.DEPTH_TEST);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target);
+    gl.viewport(vp[0], vp[1], vp[2], vp[3]);
+  }
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, aoTex || videoTex);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.uniform2f(U.sheet.uCanvas, vp[2], vp[3]);
+  gl.uniform1f(U.sheet.uPx, vp[2] / viewW);
   gl.uniform1f(U.sheet.uShadow, 0);
   gl.uniform1f(U.sheet.uAlpha, o.alpha);
   gl.uniform2f(U.sheet.uOffset, o.offset[0], o.offset[1]);
