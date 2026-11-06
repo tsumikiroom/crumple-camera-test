@@ -24,30 +24,27 @@ button {
   text-transform: uppercase; letter-spacing: .14em; font-size: 11px; touch-action: manipulation; cursor: pointer;
 }
 .edge { padding-left: max(24px, env(safe-area-inset-left, 0px)); padding-right: max(24px, env(safe-area-inset-right, 0px)); }
-/* start */
-#start {
-  position: fixed; inset: 0; display: flex; flex-direction: column; justify-content: space-between;
-  padding-top: calc(env(safe-area-inset-top, 0px) + 28px); padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
-  background: var(--wall);
+/* before a camera is chosen: the wall, the words along the top, and one line in the middle */
+#stage { visibility: hidden; }
+body.started #stage { visibility: visible; }
+#intro {
+  position: fixed; left: 0; right: 0; top: 50%; transform: translateY(-50%); text-align: center; color: var(--mute);
 }
-#start h1 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: .02em; }
-#start .meta { margin: 2px 0 0; color: var(--mute); }
-#start p { margin: 0 0 20px; max-width: 30em; color: var(--mute); }
-#start .pick { display: flex; border-top: 1px solid var(--line); }
-#start .pick button { flex: 1; min-height: 64px; text-align: left; }
-#start .pick button + button { border-left: 1px solid var(--line); padding-left: 16px; }
-#start.hide { display: none; }
-#err { display: none; margin: 0 0 16px; padding: 10px 0 0; border-top: 1px solid var(--hot); color: var(--hot); white-space: pre-line; }
+#intro .ask { margin: 0 auto 6px; color: var(--ink); font-size: 11px; text-transform: uppercase; letter-spacing: .16em; }
+#intro p { margin: 0 auto; max-width: 26em; }
+body.started #intro { display: none; }
+#err { display: none; max-width: 26em; margin: 14px auto 0; padding-top: 10px; border-top: 1px solid var(--hot); color: var(--hot); white-space: pre-line; }
 #err.show { display: block; }
 /* while in use: three small words along the top */
 #top {
-  position: fixed; left: 0; right: 0; top: 0; display: none; justify-content: space-between; align-items: center;
+  position: fixed; left: 0; right: 0; top: 0; display: flex; justify-content: space-between; align-items: center;
   padding-top: calc(env(safe-area-inset-top, 0px) + 8px); pointer-events: none;
   color: #fff; text-shadow: 0 0 10px rgba(0,0,0,.45); transition: color .4s, text-shadow .4s;
 }
-#top.show { display: flex; }
 #top button { pointer-events: auto; }
-#facetsBtn { opacity: .55; }
+#facetsBtn, .cams button { opacity: .5; }
+.cams button.on { opacity: 1; }
+.cams button + button { margin-left: 18px; }
 #facetsBtn.on { opacity: 1; }
 #photosBtn.pulse { animation: pulse .7s ease; }
 @keyframes pulse { 40% { color: var(--hot); } }
@@ -87,23 +84,18 @@ body.wall #top, body.wall #hint, body.wall #toast { color: var(--ink); text-shad
 #viewer .row { display: flex; justify-content: space-between; border-top: 1px solid var(--line); margin-top: 12px; }
 </style>
 </head>
-<body>
+<body class="wall">
 <canvas id="stage"></canvas>
 <video id="cam" playsinline muted autoplay></video>
 
-<div id="start">
-  <div class="edge"><h1>Crumple Camera</h1><p class="meta">Paper / 001</p></div>
-  <div>
-    <div class="edge">
-      <p>Touch the picture and it peels off like paper. Push and pinch to crumple. Hold still to pick it up &mdash; swipe down to keep, up to throw away. The video never leaves this device.</p>
-      <div id="err"></div>
-    </div>
-    <div class="pick edge"><button data-facing="user">Front</button><button data-facing="environment">Back</button></div>
-  </div>
+<div id="intro" class="edge">
+  <p class="ask">Choose Front or Back</p>
+  <p>Touch the picture and it peels off like paper. Push and pinch to crumple. Hold still to pick it up &mdash; swipe down to keep, up to throw away. The video never leaves this device.</p>
+  <div id="err"></div>
 </div>
 
 <div id="top" class="edge">
-  <button id="flip">Front</button>
+  <span class="cams"><button data-facing="user">Front</button><button data-facing="environment">Back</button></span>
   <button id="facetsBtn" class="on">Facets</button>
   <button id="photosBtn">Photos 00</button>
 </div>
@@ -258,12 +250,11 @@ const params = new URLSearchParams(location.search);
 const TEST = params.has('test');
 
 const $ = (id) => document.getElementById(id);
-const cv = $('stage'), video = $('cam'), startEl = $('start'), errEl = $('err'), topEl = $('top');
+const cv = $('stage'), video = $('cam'), errEl = $('err');
 const hint = $('hint'), toastEl = $('toast'), photosBtn = $('photosBtn');
 
 function showError(text) {
-  startEl.classList.remove('hide');
-  topEl.classList.remove('show');
+  document.body.classList.remove('started'); // back to the wall and the line in the middle, with the message under it
   errEl.textContent = text;
   errEl.classList.add('show');
 }
@@ -701,14 +692,13 @@ function openCamera(want) {
     if (seq !== openSeq) { if (!TEST) for (const t of s.getTracks()) t.stop(); throw { stale: true }; }
     stream = s;
     facing = want;
-    $('flip').textContent = want === 'user' ? 'Front' : 'Back';
     mirror = want === 'user';
     video.srcObject = s;
     return video.play();
   }).then(() => {
     if (seq !== openSeq) return;
-    startEl.classList.add('hide');
-    topEl.classList.add('show');
+    document.body.classList.add('started');
+    for (const b of document.querySelectorAll('.cams button')) b.classList.toggle('on', b.dataset.facing === facing);
     if (!started) { started = true; showHint('Touch to peel'); }
   }).catch((e) => {
     if ((e && e.stale) || seq !== openSeq) return; // a newer request is in charge
@@ -717,7 +707,6 @@ function openCamera(want) {
   });
 }
 for (const b of document.querySelectorAll('[data-facing]')) b.addEventListener('click', () => openCamera(b.dataset.facing));
-$('flip').addEventListener('click', () => openCamera(facing === 'user' ? 'environment' : 'user'));
 $('facetsBtn').addEventListener('click', () => { facets = !facets; $('facetsBtn').classList.toggle('on', facets); $('facetsBtn').textContent = facets ? 'Facets' : 'Smooth'; });
 
 function coverCrop(vw, vh) { // video uv rectangle that fills the screen
@@ -1103,7 +1092,7 @@ function frame(now) {
   gl.uniform4f(U.bg.uCrop, crop[0], crop[1], crop[2], crop[3]);
   gl.uniform1f(U.bg.uMirror, mirror ? 1 : 0);
   gl.uniform1f(U.bg.uDim, phase === 'live' ? fade : 1 - lift);
-  document.body.classList.toggle('wall', phase !== 'live');
+  document.body.classList.toggle('wall', phase !== 'live' || !document.body.classList.contains('started'));
   gl.bindVertexArray(fullVao);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.bindVertexArray(null);
