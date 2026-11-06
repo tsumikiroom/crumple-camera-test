@@ -7,80 +7,84 @@
 <title>Crumple Camera</title>
 <link rel="icon" href="data:,">
 <style>
-:root { --paper: #000; --ink: #f2f0ec; --mute: #9a958d; --bar: rgba(16,16,18,.72); --edge: rgba(255,255,255,.16); --hot: #ff5a36; --sheet: #f3f1ec; }
+:root { --wall: #ecebe8; --ink: #232221; --mute: #8d8984; --line: rgba(35,34,33,.18); --hot: #d2452b; }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body {
   margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none;
-  background: var(--paper); color: var(--ink); touch-action: none;
+  background: var(--wall); color: var(--ink); touch-action: none;
   -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
-  font: 16px/1.4 system-ui, -apple-system, "Hiragino Sans", "Segoe UI", sans-serif;
+  font: 500 12px/1.5 "Helvetica Neue", Helvetica, system-ui, -apple-system, "Hiragino Sans", "Segoe UI", sans-serif;
+  letter-spacing: .02em;
 }
 #stage { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
 #cam { position: fixed; left: 0; top: 0; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
+/* every control is plain small text; no fills, no rounded pills */
 button {
-  font: inherit; color: var(--ink); background: rgba(255,255,255,.08); touch-action: manipulation;
-  border: 1px solid var(--edge); border-radius: 14px; min-height: 48px; padding: 0 14px;
+  font: inherit; color: inherit; background: none; border: 0; border-radius: 0; padding: 0 2px; min-height: 44px;
+  text-transform: uppercase; letter-spacing: .14em; font-size: 11px; touch-action: manipulation; cursor: pointer;
 }
+.edge { padding-left: max(24px, env(safe-area-inset-left, 0px)); padding-right: max(24px, env(safe-area-inset-right, 0px)); }
+/* start */
 #start {
-  position: fixed; inset: 0; display: flex; flex-direction: column; justify-content: center; gap: 16px;
-  padding: calc(env(safe-area-inset-top, 0px) + 24px) max(20px, env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom, 0px) + 24px) max(20px, env(safe-area-inset-left, 0px));
-  background: var(--paper);
+  position: fixed; inset: 0; display: flex; flex-direction: column; justify-content: space-between;
+  padding-top: calc(env(safe-area-inset-top, 0px) + 28px); padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+  background: var(--wall);
 }
-#start h1 { margin: 0 0 4px; font-size: 22px; font-weight: 600; }
-#start p { margin: 0 0 12px; color: var(--mute); }
-#start button { min-height: 88px; font-size: 22px; font-weight: 600; border-radius: 18px; }
+#start h1 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: .02em; }
+#start .meta { margin: 2px 0 0; color: var(--mute); }
+#start p { margin: 0 0 20px; max-width: 30em; color: var(--mute); }
+#start .pick { display: flex; border-top: 1px solid var(--line); }
+#start .pick button { flex: 1; min-height: 64px; text-align: left; }
+#start .pick button + button { border-left: 1px solid var(--line); padding-left: 16px; }
 #start.hide { display: none; }
-#err {
-  display: none; margin-top: 8px; padding: 14px 16px; border-radius: 14px;
-  background: rgba(255,90,54,.16); border: 1px solid var(--hot); white-space: pre-line;
-}
+#err { display: none; margin: 0 0 16px; padding: 10px 0 0; border-top: 1px solid var(--hot); color: var(--hot); white-space: pre-line; }
 #err.show { display: block; }
+/* while in use: three small words along the top */
 #top {
-  position: fixed; left: 0; right: 0; top: 0; display: none; justify-content: space-between; gap: 8px;
-  padding: calc(env(safe-area-inset-top, 0px) + 12px) max(12px, env(safe-area-inset-right, 0px)) 0 max(12px, env(safe-area-inset-left, 0px));
-  pointer-events: none;
+  position: fixed; left: 0; right: 0; top: 0; display: none; justify-content: space-between; align-items: center;
+  padding-top: calc(env(safe-area-inset-top, 0px) + 8px); pointer-events: none;
+  color: #fff; text-shadow: 0 0 10px rgba(0,0,0,.45); transition: color .4s, text-shadow .4s;
 }
 #top.show { display: flex; }
-#top button { pointer-events: auto; background: var(--bar); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
-#photosBtn.pulse { animation: pulse .6s ease; }
-#facetsBtn.on { background: rgba(255,255,255,.85); color: #1a1918; }
-@keyframes pulse { 0% { transform: scale(1); } 40% { transform: scale(1.18); background: var(--hot); } 100% { transform: scale(1); } }
+#top button { pointer-events: auto; }
+#facetsBtn { opacity: .55; }
+#facetsBtn.on { opacity: 1; }
+#photosBtn.pulse { animation: pulse .7s ease; }
+@keyframes pulse { 40% { color: var(--hot); } }
 #hint {
-  position: fixed; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom, 0px) + 20px);
-  text-align: center; pointer-events: none; transition: opacity .5s; color: var(--ink); opacity: 0;
-  text-shadow: 0 1px 6px rgba(0,0,0,.8);
+  position: fixed; left: 24px; right: 24px; bottom: calc(env(safe-area-inset-bottom, 0px) + 22px);
+  text-align: center; pointer-events: none; transition: opacity .5s, color .4s; opacity: 0;
+  font-size: 10px; text-transform: uppercase; letter-spacing: .16em; color: #fff; text-shadow: 0 0 10px rgba(0,0,0,.45);
 }
-#hint.onwall { color: #3a3733; text-shadow: 0 0 8px rgba(255,255,255,.9); }  /* on the light wall behind a peeled sheet */
 #toast {
-  position: fixed; left: 50%; top: 42%; transform: translate(-50%, -50%); padding: 10px 18px; border-radius: 999px;
-  background: var(--bar); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
   opacity: 0; transition: opacity .3s; pointer-events: none; white-space: nowrap;
+  font-size: 10px; text-transform: uppercase; letter-spacing: .2em; color: #fff; text-shadow: 0 0 10px rgba(0,0,0,.45);
 }
 #toast.show { opacity: 1; }
-/* drawer: the photo folder */
+/* once the sheet is peeled the light wall shows: dark text, with a faint light halo so it still reads where the paper is behind it */
+body.wall #top, body.wall #hint, body.wall #toast { color: var(--ink); text-shadow: 0 0 6px rgba(236,235,232,.95), 0 0 2px rgba(236,235,232,.95); }
+/* the photo folder */
 #drawer {
-  position: fixed; top: 0; right: 0; bottom: 0; width: min(88vw, 380px); display: flex; flex-direction: column;
-  background: var(--sheet); color: #1a1918; box-shadow: -8px 0 30px rgba(0,0,0,.45);
-  transform: translateX(100%); visibility: hidden; transition: transform .3s ease, visibility 0s linear .3s;
-  padding: calc(env(safe-area-inset-top, 0px) + 10px) max(10px, env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom, 0px) + 10px) 10px;
+  position: fixed; inset: 0; display: flex; flex-direction: column; background: var(--wall); color: var(--ink);
+  transform: translateY(100%); visibility: hidden; transition: transform .35s ease, visibility 0s linear .35s;
+  padding-top: calc(env(safe-area-inset-top, 0px) + 8px); padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
 }
-#drawer.open { transform: none; visibility: visible; transition: transform .3s ease; }
-#drawer header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px 8px; }
-#drawer h2 { margin: 0; font-size: 18px; font-weight: 600; }
-#drawer button, #viewer button { color: #1a1918; background: #fff; border-color: rgba(0,0,0,.14); }
-#drawer .note { margin: 0 4px 8px; font-size: 13px; color: #6d6962; }
-#grid { flex: 1; overflow-y: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-content: start; padding: 2px; touch-action: pan-y; }
-#grid button { padding: 0; border: 0; min-height: 0; aspect-ratio: 3 / 4; border-radius: 6px; overflow: hidden; background: #fff; }
+#drawer.open { transform: none; visibility: visible; transition: transform .35s ease; }
+#drawer header { display: flex; align-items: center; justify-content: space-between; }
+#drawer h2 { margin: 0; font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: .14em; }
+#drawer .note { margin: 0 0 16px; color: var(--mute); }
+#grid { flex: 1; overflow-y: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-content: start; touch-action: pan-y; }
+#grid button { padding: 0; min-height: 0; aspect-ratio: 3 / 4; background: none; }
 #grid img { width: 100%; height: 100%; object-fit: contain; display: block; pointer-events: none; }
-#empty { margin: 24px 4px; color: #6d6962; }
+#empty { margin: 32px 0; color: var(--mute); }
 #viewer {
-  position: fixed; inset: 0; display: none; flex-direction: column; background: var(--sheet); color: #1a1918;
-  padding: calc(env(safe-area-inset-top, 0px) + 10px) max(12px, env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom, 0px) + 12px) max(12px, env(safe-area-inset-left, 0px));
+  position: fixed; inset: 0; display: none; flex-direction: column; background: var(--wall); color: var(--ink);
+  padding-top: calc(env(safe-area-inset-top, 0px) + 16px); padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 8px);
 }
 #viewer.show { display: flex; }
 #viewer img { flex: 1; min-height: 0; width: 100%; object-fit: contain; }
-#viewer .row { display: flex; gap: 8px; margin-top: 10px; }
-#viewer .row button { flex: 1; }
+#viewer .row { display: flex; justify-content: space-between; border-top: 1px solid var(--line); margin-top: 12px; }
 </style>
 </head>
 <body>
@@ -88,31 +92,34 @@ button {
 <video id="cam" playsinline muted autoplay></video>
 
 <div id="start">
-  <h1>Crumple Camera</h1>
-  <p>Pick a camera. Touch the picture and it peels off the screen like a sheet of paper. Push, drag and pinch it to crumple it. Hold still to pick it up, then swipe down to keep it as a photo, or up to crumple it into a ball and throw it away. The video never leaves this device.</p>
-  <button data-facing="user">Front camera</button>
-  <button data-facing="environment">Back camera</button>
-  <div id="err"></div>
+  <div class="edge"><h1>Crumple Camera</h1><p class="meta">Paper / 001</p></div>
+  <div>
+    <div class="edge">
+      <p>Touch the picture and it peels off like paper. Push and pinch to crumple. Hold still to pick it up &mdash; swipe down to keep, up to throw away. The video never leaves this device.</p>
+      <div id="err"></div>
+    </div>
+    <div class="pick edge"><button data-facing="user">Front</button><button data-facing="environment">Back</button></div>
+  </div>
 </div>
 
-<div id="top">
-  <button id="flip">Switch camera</button>
+<div id="top" class="edge">
+  <button id="flip">Front</button>
   <button id="facetsBtn" class="on">Facets</button>
-  <button id="photosBtn">Photos 0</button>
+  <button id="photosBtn">Photos 00</button>
 </div>
 <div id="hint"></div>
 <div id="toast"></div>
 
-<div id="drawer" aria-hidden="true">
-  <header><h2>Photos</h2><button id="closeDrawer">Close</button></header>
-  <p class="note">Kept only while this page is open. Open a photo to save it to your device.</p>
+<div id="drawer" class="edge" aria-hidden="true">
+  <header><h2 id="drawerTitle">Photos 00</h2><button id="closeDrawer">Close</button></header>
+  <p class="note">Kept only while this page is open. Open one to save it.</p>
   <div id="grid"></div>
   <p id="empty">No photos yet. Hold the sheet still to pick it up, then swipe down.</p>
 </div>
 
-<div id="viewer">
+<div id="viewer" class="edge">
   <img id="viewImg" alt="Crumpled photo">
-  <div class="row"><button id="saveBtn">Save to device</button><button id="closeViewer">Close</button></div>
+  <div class="row"><button id="saveBtn">Save</button><button id="closeViewer">Close</button></div>
 </div>
 
 <!-- full-screen triangle for the wall behind the sheet and the shadow passes -->
@@ -180,12 +187,13 @@ uniform vec2 uOffset;     // css px
 uniform float uDepth;     // css px of height that maps to the full depth range
 uniform float uShadow;    // > 0: the shadow outline pass (flattened onto the wall, pushed a little away from the light)
 out vec2 vUV;
+out vec3 vPos;
 void main() {
   vec2 xy = aPos.xy;
   float z = aPos.z;
   if (uShadow > 0.0) { xy += vec2(0.25, 0.45) * clamp(z, 0.0, 24.0); z = -1.0; } // high parts cast a little further, but not far
   vec2 s = uCenter + (xy - uSheetC) * uScale + uOffset;
-  vUV = aUV;
+  vUV = aUV; vPos = aPos;
   gl_Position = vec4(s.x / uView.x * 2.0 - 1.0, 1.0 - s.y / uView.y * 2.0, clamp(-z / uDepth, -1.0, 1.0), 1.0);
 }
 </script>
@@ -198,13 +206,30 @@ uniform vec4 uCrop;
 uniform float uMirror;
 uniform float uShadow;
 uniform float uAlpha;
+uniform float uFacets;   // 1 = the angular low-poly shape: each triangle is lit by its tilt
 in vec2 vUV;
+in vec3 vPos;
 out vec4 o;
 void main() {
   if (uShadow > 0.0) { o = vec4(1.0); return; }      // outline only: overlapping layers do not add up
   vec2 uv = uCrop.xy + vUV * uCrop.zw;
   if (uMirror > 0.5) uv.x = 1.0 - uv.x;
-  o = vec4(texture(uImg, uv).rgb, uAlpha);
+  vec3 c = texture(uImg, uv).rgb;
+  if (uFacets > 0.5) {
+    vec3 N = normalize(cross(dFdx(vPos), dFdy(vPos)));  // one tilt per triangle
+    if (N.z < 0.0) N = -N;                              // paper has two sides
+    N = normalize(vec3(N.xy * 1.5, N.z));               // small tilts still read as facets
+    // several lights at once, like a room: a key light from the upper left, a weak fill from the right,
+    // and soft light from the sky above. Each is divided by what it gives a flat sheet, so flat paper
+    // keeps the picture's own colours and only tilted facets get lighter or darker.
+    vec3 K = normalize(vec3(-0.5, -0.6, 0.62)), F = normalize(vec3(0.75, 0.1, 0.65));
+    float key = max(dot(N, K), 0.0), fill = max(dot(N, F), 0.0), sky = 0.5 + 0.5 * N.z;
+    float light = (0.62 * key + 0.18 * fill + 0.3 * sky) / (0.62 * K.z + 0.18 * F.z + 0.3);
+    vec3 H = normalize(K + vec3(0.0, 0.0, 1.0));
+    float sheen = max(pow(max(dot(N, H), 0.0), 12.0) - pow(H.z, 12.0), 0.0) * 0.06;  // matte paper, a faint gloss
+    c = c * clamp(light, 0.55, 1.2) + sheen;
+  }
+  o = vec4(c, uAlpha);
 }
 </script>
 
@@ -231,7 +256,7 @@ let progBg, progSheet, progBlur, progShade;
 const U = { bg: {}, sheet: {}, blur: {}, shade: {} };
 let shTex = [], shFb = [], shW = 0, shH = 0;
 let fullVao, sheetVao, posBuf, uvBuf, idxBuf, sheetCount = 0;
-let lpVao, lpPosBuf, lpUvBuf, lpIdxBuf, lpCount = 0;   // the low-poly mesh (big flat triangles, no light and shade)
+let lpVao, lpPosBuf, lpUvBuf, lpIdxBuf, lpCount = 0;   // the low-poly mesh (big flat triangles, lit by several soft lights)
 let facets = true;
 let videoTex, paperTex, capFb, capColor, capDepth, capW = 0, capH = 0;
 
@@ -269,7 +294,7 @@ if (!gl) {
   try {
     progBg = program('vFull', 'fBg', [], ['uTex', 'uCrop', 'uMirror', 'uDim'], U.bg);
     progSheet = program('vSheet', 'fSheet', ['aPos', 'aUV'], ['uView', 'uCenter', 'uSheetC', 'uScale', 'uOffset', 'uDepth',
-      'uShadow', 'uImg', 'uCrop', 'uMirror', 'uAlpha'], U.sheet);
+      'uShadow', 'uImg', 'uCrop', 'uMirror', 'uAlpha', 'uFacets'], U.sheet);
     progBlur = program('vFull', 'fBlur', [], ['uTex', 'uDir'], U.blur);
     progShade = program('vFull', 'fShade', [], ['uTex', 'uAmt'], U.shade);
     fullVao = gl.createVertexArray();
@@ -655,6 +680,7 @@ function openCamera(want) {
     if (seq !== openSeq) { if (!TEST) for (const t of s.getTracks()) t.stop(); throw { stale: true }; }
     stream = s;
     facing = want;
+    $('flip').textContent = want === 'user' ? 'Front' : 'Back';
     mirror = want === 'user';
     video.srcObject = s;
     return video.play();
@@ -662,7 +688,7 @@ function openCamera(want) {
     if (seq !== openSeq) return;
     startEl.classList.add('hide');
     topEl.classList.add('show');
-    if (!started) { started = true; showHint('Touch the picture to peel it off the screen'); }
+    if (!started) { started = true; showHint('Touch to peel'); }
   }).catch((e) => {
     if ((e && e.stale) || seq !== openSeq) return; // a newer request is in charge
     stopStream();
@@ -671,7 +697,7 @@ function openCamera(want) {
 }
 for (const b of document.querySelectorAll('[data-facing]')) b.addEventListener('click', () => openCamera(b.dataset.facing));
 $('flip').addEventListener('click', () => openCamera(facing === 'user' ? 'environment' : 'user'));
-$('facetsBtn').addEventListener('click', () => { facets = !facets; $('facetsBtn').classList.toggle('on', facets); });
+$('facetsBtn').addEventListener('click', () => { facets = !facets; $('facetsBtn').classList.toggle('on', facets); $('facetsBtn').textContent = facets ? 'Facets' : 'Smooth'; });
 
 function coverCrop(vw, vh) { // video uv rectangle that fills the screen
   if (!vw || !vh) return [0, 0, 1, 1];
@@ -709,7 +735,7 @@ function peel() {
   }
   paperMirror = mirror;
   phase = 'peeled';
-  if (!peeledHinted) { peeledHinted = true; showHint('Push and pinch to crumple · hold still to pick it up', 5000); }
+  if (!peeledHinted) { peeledHinted = true; showHint('Push / pinch to crumple — hold to pick up', 5000); }
 }
 
 function newSheet() {
@@ -792,7 +818,7 @@ function startHold(id) {
   grabs.delete(id); // the finger now carries the whole sheet instead of pulling one spot
   hold = { id, x: p.ax, y: p.ay, vx: 0, vy: 0, t: performance.now() };
   if (navigator.vibrate) { try { navigator.vibrate(12); } catch (_) {} }
-  showHint('Swipe down to keep · swipe up to throw away', 3000);
+  showHint('↓ Keep — ↑ Throw away', 3000);
 }
 
 // ---------- photo folder ----------
@@ -835,12 +861,12 @@ function keepPhoto() {
   }
   // un-premultiply is not needed: the sheet is drawn opaque
   cg.putImageData(img, 0, 0);
-  // place it on white, like a scan of the crumpled paper
+  // place it on the same light wall, like a photo of the crumpled paper on it
   const fit = Math.min(1, 1200 / Math.max(bw, bh)), margin = Math.round(Math.max(bw, bh) * fit * 0.07);
   const out = document.createElement('canvas');
   out.width = Math.round(bw * fit) + margin * 2; out.height = Math.round(bh * fit) + margin * 2;
   const og = out.getContext('2d');
-  og.fillStyle = '#f7f6f3'; og.fillRect(0, 0, out.width, out.height);
+  og.fillStyle = '#ecebe8'; og.fillRect(0, 0, out.width, out.height);
   og.shadowColor = 'rgba(0,0,0,.28)'; og.shadowBlur = margin * 0.35; og.shadowOffsetY = margin * 0.08;
   og.drawImage(crop, margin, margin, bw * fit, bh * fit);
   out.toBlob((blob) => {
@@ -854,7 +880,9 @@ function keepPhoto() {
 const drawer = $('drawer'), grid = $('grid'), viewer = $('viewer'), viewImg = $('viewImg');
 let viewing = null;
 function renderGrid() {
-  photosBtn.textContent = 'Photos ' + photos.length;
+  const count = String(photos.length).padStart(2, '0');
+  photosBtn.textContent = 'Photos ' + count;
+  $('drawerTitle').textContent = 'Photos ' + count;
   $('empty').style.display = photos.length ? 'none' : '';
   grid.textContent = '';
   photos.forEach((p, i) => {
@@ -898,6 +926,7 @@ function drawSheet(o) {
   gl.uniform2f(U.sheet.uSheetC, sheetW / 2, sheetH / 2);
   gl.uniform1f(U.sheet.uScale, o.scale * fit());
   gl.uniform1f(U.sheet.uDepth, unit * 2);
+  gl.uniform1f(U.sheet.uFacets, facets && !live ? 1 : 0);
   gl.bindVertexArray(vao);
   if (o.shadow) { // a faint, soft shadow on the wall
     // 1) the sheet's outline, once, into a small image (a quarter of the screen size), nudged away from the light
@@ -918,13 +947,14 @@ function drawSheet(o) {
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.uniform1f(U.sheet.uShadow, 1);
-    gl.uniform2f(U.sheet.uOffset, o.offset[0] + (2 + 4 * holdLift) * lift, o.offset[1] + (5 + 10 * holdLift) * lift);
+    // the sheet floats a hair above the wall: the shadow sits a little off toward the lower right, with soft edges all round
+    gl.uniform2f(U.sheet.uOffset, o.offset[0] + (4 + 4 * holdLift) * lift, o.offset[1] + (8 + 10 * holdLift) * lift);
     gl.drawElements(gl.TRIANGLES, count, gl.UNSIGNED_INT, 0);
     // 2) blur it across, then down (softer while the sheet is held up)
     gl.useProgram(progBlur);
     gl.bindVertexArray(fullVao);
     gl.activeTexture(gl.TEXTURE0);
-    const spread = 1.2 + 1.2 * holdLift;
+    const spread = 1.6 + 1.2 * holdLift;
     for (const [src, dst, dx, dy] of [[0, 1, spread / w, 0], [1, 0, 0, spread / h]]) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, shFb[dst]);
       gl.bindTexture(gl.TEXTURE_2D, shTex[src]);
@@ -936,7 +966,7 @@ function drawSheet(o) {
     gl.viewport(0, 0, cv.width, cv.height);
     gl.useProgram(progShade);
     gl.bindTexture(gl.TEXTURE_2D, shTex[0]);
-    gl.uniform1f(U.shade.uAmt, 0.2 * lift * o.alpha);
+    gl.uniform1f(U.shade.uAmt, 0.24 * lift * o.alpha);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -994,7 +1024,7 @@ function frame(now) {
   if (phase === 'peeled' && !hold) { offset[0] *= 1 - k; offset[1] *= 1 - k; }
   if (phase === 'fly') {
     offset[0] += flyV[0] * dt; offset[1] += flyV[1] * dt;
-    if (Math.abs(offset[0]) > viewW * 1.3 || Math.abs(offset[1]) > viewH * 1.3) { newSheet(); toast('Kept in Photos'); }
+    if (Math.abs(offset[0]) > viewW * 1.3 || Math.abs(offset[1]) > viewH * 1.3) { newSheet(); toast('Kept'); }
   }
   if (phase === 'ball') {
     ball.t += dt;
@@ -1018,7 +1048,7 @@ function frame(now) {
   gl.uniform4f(U.bg.uCrop, crop[0], crop[1], crop[2], crop[3]);
   gl.uniform1f(U.bg.uMirror, mirror ? 1 : 0);
   gl.uniform1f(U.bg.uDim, phase === 'live' ? fade : 1 - lift);
-  hint.classList.toggle('onwall', phase !== 'live');
+  document.body.classList.toggle('wall', phase !== 'live');
   gl.bindVertexArray(fullVao);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.bindVertexArray(null);
